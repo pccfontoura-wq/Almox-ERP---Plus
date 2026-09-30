@@ -1,0 +1,459 @@
+{
+  "entities": {
+    "users": {
+      "fields": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "profile": { "type": "string", "enum": ["MASTER", "REGULAR", "VISITANTE"] },
+        "cityId": { "type": "string" },
+        "phone": { "type": "string" },
+        "position": { "type": "string" },
+        "active": { "type": "boolean" },
+        "firstAccess": { "type": "boolean" },
+        "lastLogin": { "type": "string" },
+        "photo": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "cities": {
+      "fields": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "state": { "type": "string" },
+        "code": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "branches": {
+      "fields": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "corporateName": { "type": "string" },
+        "unitType": { "type": "string", "enum": ["MATRIZ", "UNIDADE_OPERACIONAL", "CENTRO_DISTRIBUICAO", "ADMINISTRATIVA", "OBRA_PROJETO"] },
+        "cnpj": { "type": "string" },
+        "stateRegistration": { "type": "string" },
+        "municipalRegistration": { "type": "string" },
+        "cnae": { "type": "string" },
+        "zipCode": { "type": "string" },
+        "street": { "type": "string" },
+        "number": { "type": "string" },
+        "complement": { "type": "string" },
+        "neighborhood": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "address": { "type": "string" },
+        "referencePoint": { "type": "string" },
+        "manager": { "type": "string" },
+        "managerRole": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "email": { "type": "string" },
+        "operatingHours": { "type": "string" },
+        "areaM2": { "type": "number" },
+        "openingDate": { "type": "string" },
+        "notes": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "categories": {
+      "fields": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "color": { "type": "string" },
+        "icon": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "products": {
+      "fields": {
+        "id": { "type": "string" },
+        "automaticCode": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "unit": { "type": "string" },
+        "minimumStock": { "type": "number" },
+        "maximumStock": { "type": "number" },
+        "reorderPoint": { "type": "number" },
+        "averageCost": { "type": "number" },
+        "currentCost": { "type": "number" },
+        "supplierId": { "type": "string" },
+        "photo": { "type": "string" },
+        "barcode": { "type": "string" },
+        "controlsValidity": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "suppliers": {
+      "fields": {
+        "id": { "type": "string" },
+        "corporateName": { "type": "string" },
+        "tradeName": { "type": "string" },
+        "cnpj": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "contact": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zipCode": { "type": "string" },
+        "notes": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "stock": {
+      "fields": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "cityId": { "type": "string" },
+        "quantity": { "type": "number" },
+        "reservedQuantity": { "type": "number" },
+        "availableQuantity": { "type": "number" },
+        "lastMovement": { "type": "string" },
+        "lastInventory": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "movements": {
+      "fields": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "cityId": { "type": "string" },
+        "userId": { "type": "string" },
+        "movementType": { "type": "string", "enum": ["ENTRADA", "SAIDA", "TRANSFERENCIA", "AJUSTE", "INVENTARIO"] },
+        "quantity": { "type": "number" },
+        "previousBalance": { "type": "number" },
+        "currentBalance": { "type": "number" },
+        "reason": { "type": "string" },
+        "purchaseOrderId": { "type": "string" },
+        "transferId": { "type": "string" },
+        "inventoryId": { "type": "string" },
+        "notes": { "type": "string" },
+        "movementDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "transfers": {
+      "fields": {
+        "id": { "type": "string" },
+        "originCity": { "type": "string" },
+        "destinationCity": { "type": "string" },
+        "status": { "type": "string", "enum": ["EM_TRANSITO", "RECEBIDA", "CANCELADA"] },
+        "requestedBy": { "type": "string" },
+        "approvedBy": { "type": "string" },
+        "receivedBy": { "type": "string" },
+        "requestDate": { "type": "string" },
+        "shippingDate": { "type": "string" },
+        "receivingDate": { "type": "string" },
+        "notes": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "purchaseRequests": {
+      "fields": {
+        "id": { "type": "string" },
+        "number": { "type": "string" },
+        "requester": { "type": "string" },
+        "cityId": { "type": "string" },
+        "status": { "type": "string" },
+        "totalValue": { "type": "number" },
+        "priority": { "type": "string" },
+        "notes": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "purchaseQuotes": {
+      "fields": {
+        "id": { "type": "string" },
+        "purchaseRequestId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "price": { "type": "number" },
+        "deliveryTime": { "type": "string" },
+        "paymentTerms": { "type": "string" },
+        "winner": { "type": "boolean" },
+        "observations": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "purchaseOrders": {
+      "fields": {
+        "id": { "type": "string" },
+        "number": { "type": "string" },
+        "purchaseRequestId": { "type": "string" },
+        "buyer": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "status": { "type": "string", "enum": ["ABERTA", "EM_COTACAO", "AGUARDANDO_APROVACAO", "APROVADA", "COMPRADA", "RECEBIDA_PARCIAL", "RECEBIDA_TOTAL", "CANCELADA"] },
+        "totalValue": { "type": "number" },
+        "invoiceNumber": { "type": "string" },
+        "invoiceValue": { "type": "number" },
+        "invoiceDate": { "type": "string" },
+        "expectedDelivery": { "type": "string" },
+        "deliveryDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "inventory": {
+      "fields": {
+        "id": { "type": "string" },
+        "cityId": { "type": "string" },
+        "type": { "type": "string", "enum": ["GERAL", "ROTATIVO"] },
+        "status": { "type": "string" },
+        "startedBy": { "type": "string" },
+        "finishedBy": { "type": "string" },
+        "startDate": { "type": "string" },
+        "finishDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "inventoryItems": {
+      "fields": {
+        "id": { "type": "string" },
+        "inventoryId": { "type": "string" },
+        "productId": { "type": "string" },
+        "expectedQuantity": { "type": "number" },
+        "countedQuantity": { "type": "number" },
+        "difference": { "type": "number" },
+        "reason": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "assets": {
+      "fields": {
+        "id": { "type": "string" },
+        "assetNumber": { "type": "string" },
+        "description": { "type": "string" },
+        "productId": { "type": "string" },
+        "responsible": { "type": "string" },
+        "costCenter": { "type": "string" },
+        "deliveryDate": { "type": "string" },
+        "returnDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["EM_USO", "DEVOLVIDO", "BAIXADO"] },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "assetHistory": {
+      "fields": {
+        "id": { "type": "string" },
+        "assetId": { "type": "string" },
+        "action": { "type": "string" },
+        "userId": { "type": "string" },
+        "date": { "type": "string" },
+        "notes": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "costCenters": {
+      "fields": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "manager": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "attachments": {
+      "fields": {
+        "id": { "type": "string" },
+        "entity": { "type": "string" },
+        "entityId": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileType": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "uploadDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "productValidity": {
+      "fields": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "cityId": { "type": "string" },
+        "expirationDate": { "type": "string" },
+        "quantity": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "productConsumption": {
+      "fields": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "cityId": { "type": "string" },
+        "month": { "type": "number" },
+        "year": { "type": "number" },
+        "consumed": { "type": "number" },
+        "averageConsumption": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "notifications": {
+      "fields": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["ALERTA", "COMPRA", "TRANSFERENCIA", "ESTOQUE", "VALIDADE", "SISTEMA"] },
+        "userId": { "type": "string" },
+        "cityId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "reports": {
+      "fields": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string" },
+        "generatedBy": { "type": "string" },
+        "cityId": { "type": "string" },
+        "date": { "type": "string" },
+        "data": { "type": "object" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "dashboard": {
+      "fields": {
+        "id": { "type": "string" },
+        "summaryType": { "type": "string" },
+        "data": { "type": "object" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "auditLogs": {
+      "fields": {
+        "id": { "type": "string" },
+        "module": { "type": "string" },
+        "action": { "type": "string" },
+        "user": { "type": "string" },
+        "city": { "type": "string" },
+        "before": { "type": "object" },
+        "after": { "type": "object" },
+        "ip": { "type": "string" },
+        "browser": { "type": "string" },
+        "date": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "settings": {
+      "fields": {
+        "id": { "type": "string" },
+        "companyName": { "type": "string" },
+        "theme": { "type": "string" },
+        "logo": { "type": "string" },
+        "emailConfiguration": { "type": "object" },
+        "backupConfiguration": { "type": "object" },
+        "systemVersion": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "aiHistory": {
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "question": { "type": "string" },
+        "answer": { "type": "string" },
+        "date": { "type": "string" }
+      }
+    },
+    "emailQueue": {
+      "fields": {
+        "id": { "type": "string" },
+        "destination": { "type": "string" },
+        "subject": { "type": "string" },
+        "body": { "type": "string" },
+        "status": { "type": "string" },
+        "attempts": { "type": "number" },
+        "sentDate": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,229 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isMaster() {
+      return isSignedIn() && (
+        getUserData().profile == 'MASTER' || 
+        getUserData().role == 'Master'
+      );
+    }
+
+    function isRegular() {
+      return isSignedIn() && (
+        getUserData().profile == 'REGULAR' || 
+        getUserData().role == 'Regular'
+      );
+    }
+
+    function isVisitante() {
+      return isSignedIn() && (
+        getUserData().profile == 'VISITANTE' || 
+        getUserData().role == 'Visitante'
+      );
+    }
+
+    function userCity() {
+      return getUserData().cityId;
+    }
+
+    function isUserCity(cityId) {
+      return isMaster() || (isRegular() && cityId == userCity());
+    }
+
+    function canReadCity(cityId) {
+      return isMaster() || (isSignedIn() && cityId == userCity());
+    }
+
+    // USERS
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isMaster() || request.auth.uid == userId || getUserData().cityId == userCity());
+      allow create, update, delete: if isMaster();
+    }
+
+    // CITIES & UNIDADES (BRANCHES)
+    match /cities/{cityId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isMaster();
+    }
+
+    match /branches/{branchId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // CATEGORIES
+    match /categories/{categoryId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isMaster();
+    }
+
+    // SETTINGS
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isMaster();
+    }
+
+    // PRODUCTS
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // SUPPLIERS
+    match /suppliers/{supplierId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // STOCK
+    match /stock/{stockId} {
+      allow read: if isMaster() || (isSignedIn() && resource.data.cityId == userCity());
+      allow create, update: if (isMaster() || (isRegular() && request.resource.data.cityId == userCity())) 
+                           && request.resource.data.quantity >= 0;
+      allow delete: if isMaster();
+    }
+
+    // MOVEMENTS (Immutable audit trail of stock movements)
+    match /movements/{movementId} {
+      allow read: if isMaster() || (isSignedIn() && resource.data.cityId == userCity());
+      allow create: if isMaster() || (isRegular() && request.resource.data.cityId == userCity());
+      allow update, delete: if false; // Jamais excluir ou alterar movimentações
+    }
+
+    // TRANSFERS
+    match /transfers/{transferId} {
+      allow read: if isMaster() || (isSignedIn() && (resource.data.originCity == userCity() || resource.data.destinationCity == userCity()));
+      allow create, update: if isMaster() || (isRegular() && (request.resource.data.originCity == userCity() || request.resource.data.destinationCity == userCity()));
+      allow delete: if isMaster();
+    }
+
+    // PURCHASE REQUESTS
+    match /purchaseRequests/{requestId} {
+      allow read: if isMaster() || (isSignedIn() && resource.data.cityId == userCity());
+      allow create, update: if isMaster() || (isRegular() && request.resource.data.cityId == userCity());
+      allow delete: if isMaster();
+    }
+
+    // PURCHASE QUOTES
+    match /purchaseQuotes/{quoteId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // PURCHASE ORDERS
+    match /purchaseOrders/{orderId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // INVENTORY
+    match /inventory/{inventoryId} {
+      allow read: if isMaster() || (isSignedIn() && resource.data.cityId == userCity());
+      allow create, update: if isMaster() || (isRegular() && request.resource.data.cityId == userCity());
+      allow delete: if isMaster();
+    }
+
+    // INVENTORY ITEMS
+    match /inventoryItems/{itemId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // ASSETS & ASSET HISTORY
+    match /assets/{assetId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    match /assetHistory/{historyId} {
+      allow read: if isSignedIn();
+      allow create: if isMaster() || isRegular();
+      allow update, delete: if false;
+    }
+
+    // COST CENTERS
+    match /costCenters/{costCenterId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // NOTIFICATIONS
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && (isMaster() || resource.data.userId == request.auth.uid || resource.data.cityId == userCity());
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // REPORTS & DASHBOARD
+    match /reports/{reportId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    match /dashboard/{docId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // AUDIT LOGS (Direct user manipulation strictly forbidden)
+    match /auditLogs/{logId} {
+      allow read: if isMaster() || (isRegular() && resource.data.city == userCity());
+      allow create: if isSignedIn(); // Log generated automatically on system actions
+      allow update, delete: if false; // Nenhum usuário pode alterar ou apagar logs
+    }
+
+    // AI HISTORY
+    match /aiHistory/{historyId} {
+      allow read: if isSignedIn() && (isMaster() || resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn();
+      allow update, delete: if isMaster();
+    }
+
+    // EMAIL QUEUE
+    match /emailQueue/{emailId} {
+      allow read, create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // ATTACHMENTS
+    match /attachments/{attachmentId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+
+    // PRODUCT VALIDITY
+    match /productValidity/{validityId} {
+      allow read: if isMaster() || (isSignedIn() && resource.data.cityId == userCity());
+      allow create, update: if isMaster() || (isRegular() && request.resource.data.cityId == userCity());
+      allow delete: if isMaster();
+    }
+
+    // PRODUCT CONSUMPTION
+    match /productConsumption/{consumptionId} {
+      allow read: if isSignedIn();
+      allow create, update: if isMaster() || isRegular();
+      allow delete: if isMaster();
+    }
+  }
+}

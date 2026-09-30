@@ -1,0 +1,6 @@
+{
+  "name": "Almox Plus - ERP de Almoxarifado e Compras",
+  "description": "Sistema ERP completo para gestão de Almoxarifado, Compras, Patrimônio, Inventário, Cadastro de Unidades, Transferências entre unidades e Indicadores Gerenciais.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
