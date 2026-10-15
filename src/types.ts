@@ -27,6 +27,10 @@ export interface BranchInfo {
   operatingHours?: string;
   areaM2?: number;
   notes?: string;
+  cnae?: string;
+  referencePoint?: string;
+  manager?: string;
+  openingDate?: string;
   active: boolean;
   createdAt: string;
   updatedAt?: string;

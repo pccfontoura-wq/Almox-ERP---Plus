@@ -47,7 +47,7 @@ const TRIGGER_LABELS: Record<BackupSnapshot['triggerType'], { label: string; col
 };
 
 export const Administracao: React.FC = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, failedAttempts, unlockUser, clearAllLockouts } = useAuth();
   const { refreshData } = useApp();
 
   const [currentTab, setCurrentTab] = useState(0);
@@ -116,16 +116,88 @@ export const Administracao: React.FC = () => {
       label: 'Perfil de Acesso',
       accessor: (u) => u.role,
       render: (u) => (
-        <Chip
-          label={u.role}
-          color={u.role === 'Master' ? 'primary' : u.role === 'Regular' ? 'info' : 'default'}
-          size="small"
-          className="font-bold text-[10px] h-5"
-        />
+        <div className="flex items-center gap-1">
+          <Chip
+            label={u.role}
+            color={u.role === 'Master' ? 'primary' : u.role === 'Regular' ? 'info' : 'default'}
+            size="small"
+            className="font-bold text-[10px] h-5"
+          />
+          {u.email.toLowerCase() === 'zynecta@gmail.com' && (
+            <Chip
+              label="👑 Titular"
+              size="small"
+              className="font-bold text-[9px] h-4 bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700"
+            />
+          )}
+        </div>
       )
     },
     { id: 'branch', label: 'Unidade Principal', accessor: (u) => u.branch },
     { id: 'isFirstAccess', label: 'Primeiro Acesso', accessor: (u) => u.isFirstAccess ? 'Sim (Exige Troca)' : 'Não' },
+    {
+      id: 'loginStatus',
+      label: 'Status / Acesso',
+      accessor: (u) => {
+        const attempt = failedAttempts[u.email.toLowerCase().trim()];
+        if (attempt?.blocked) return 'Bloqueado (3 Tentativas)';
+        return u.active ? 'Ativo' : 'Inativo';
+      },
+      render: (u) => {
+        const attempt = failedAttempts[u.email.toLowerCase().trim()];
+        const isBlocked = Boolean(attempt?.blocked);
+        if (isBlocked) {
+          return (
+            <div className="flex items-center gap-1.5">
+              <Chip
+                label="Bloqueado (3 falhas)"
+                color="error"
+                size="small"
+                className="font-bold text-[10px] h-5"
+              />
+              <Tooltip title="Clique para desbloquear o acesso deste usuário">
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={() => {
+                    unlockUser(u.email);
+                    try {
+                      const pending = JSON.parse(localStorage.getItem('almoxplus_unlock_requests') || '[]');
+                      const nextPending = pending.filter((item: string) => item.toLowerCase() !== u.email.toLowerCase());
+                      localStorage.setItem('almoxplus_unlock_requests', JSON.stringify(nextPending));
+                    } catch {
+                      // ignore
+                    }
+                    setToastSeverity('success');
+                    setToastMessage(`Acesso do usuário ${u.name} (${u.email}) foi desbloqueado com sucesso.`);
+                  }}
+                  className="text-[10px] py-0 px-2 h-5 font-bold rounded shadow-none text-slate-900 bg-amber-400 hover:bg-amber-500 normal-case"
+                >
+                  Desbloquear
+                </Button>
+              </Tooltip>
+            </div>
+          );
+        }
+        return (
+          <div className="flex items-center gap-1">
+            <Chip
+              label={u.active ? 'Ativo' : 'Inativo'}
+              color={u.active ? 'success' : 'default'}
+              size="small"
+              className="font-medium text-[10px] h-5"
+            />
+            {attempt && attempt.count > 0 && (
+              <Chip
+                label={`${attempt.count}/3 falhas`}
+                size="small"
+                className="text-[9px] h-4 bg-amber-50 text-amber-800 border border-amber-200"
+              />
+            )}
+          </div>
+        );
+      }
+    },
     {
       id: 'actions',
       label: 'Ações de Gestão',
@@ -151,7 +223,7 @@ export const Administracao: React.FC = () => {
           >
             Editar Permissões
           </Button>
-          {currentUser?.id !== u.id && (
+          {currentUser?.id !== u.id && u.email.toLowerCase() !== 'zynecta@gmail.com' && (
             <Tooltip title="Excluir Usuário">
               <IconButton
                 size="small"
@@ -458,10 +530,41 @@ export const Administracao: React.FC = () => {
       </Box>
 
       {currentTab === 0 && (
-        <DataTable
-          title="Usuários e Permissões de Acesso (RBAC)"
-          subTitle="Gerenciamento de três níveis de permissão (Master, Regular, Visitante) e unidades associadas."
-          columns={userColumns}
+        <div className="space-y-4">
+          {Object.values(failedAttempts).some((a) => a.blocked) && (
+            <Alert
+              severity="warning"
+              icon={<ShieldAlert className="w-5 h-5 text-amber-600" />}
+              className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-100 font-medium"
+              action={
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  onClick={() => {
+                    clearAllLockouts();
+                    try {
+                      localStorage.removeItem('almoxplus_unlock_requests');
+                    } catch {
+                      // ignore
+                    }
+                    setToastSeverity('success');
+                    setToastMessage('Todos os usuários bloqueados foram desbloqueados com sucesso.');
+                  }}
+                  className="font-bold text-xs capitalize text-amber-900 dark:text-amber-100 border-amber-400"
+                >
+                  Desbloquear Todos
+                </Button>
+              }
+            >
+              Existem usuários com o acesso bloqueado por exceder o limite de 3 tentativas incorretas. Você pode desbloqueá-los individualmente na coluna <strong>Status / Acesso</strong> abaixo ou clicar em &ldquo;Desbloquear Todos&rdquo;.
+            </Alert>
+          )}
+
+          <DataTable
+            title="Usuários e Permissões de Acesso (RBAC)"
+            subTitle="Gerenciamento de três níveis de permissão (Master, Regular, Visitante) e unidades associadas."
+            columns={userColumns}
           data={users}
           onAddClick={() => {
             setFormError(null);
@@ -484,6 +587,7 @@ export const Administracao: React.FC = () => {
           addButtonLabel="Cadastrar Novo Usuário"
           canEditOrAdd={true}
         />
+        </div>
       )}
 
       {currentTab === 1 && (

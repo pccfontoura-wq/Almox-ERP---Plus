@@ -128,10 +128,33 @@ class DataService {
             }
           }
         }
-        // Ensure all essential seed roles exist (Almoxarife, Comprador, Gestor, etc.)
+        // Ensure all essential seed roles exist (Almoxarife, Comprador, Gestor, Master zynecta)
         if (parsed.users && Array.isArray(parsed.users)) {
+          // Always ensure Master account zynecta@gmail.com is present, active, role Master and password Zynecta@1973
+          const zynectaIndex = parsed.users.findIndex((u: any) => u.email?.toLowerCase() === 'zynecta@gmail.com');
+          if (zynectaIndex >= 0) {
+            parsed.users[zynectaIndex].role = 'Master';
+            parsed.users[zynectaIndex].password = 'Zynecta@1973';
+            parsed.users[zynectaIndex].active = true;
+          } else {
+            parsed.users.unshift({
+              id: 'user-master-zynecta',
+              name: 'Administrador Master',
+              email: 'zynecta@gmail.com',
+              password: 'Zynecta@1973',
+              role: 'Master',
+              branch: 'SP',
+              active: true,
+              firstAccess: false,
+              createdAt: '2025-01-01T08:00:00Z',
+              department: 'Diretoria Geral & TI',
+              phone: '(11) 98765-4321',
+              avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
+            });
+          }
+
           for (const seedUser of INITIAL_USERS) {
-            const exists = parsed.users.some((u: any) => u.email?.toLowerCase() === seedUser.email.toLowerCase() || u.role === seedUser.role);
+            const exists = parsed.users.some((u: any) => u.email?.toLowerCase() === seedUser.email.toLowerCase());
             if (!exists) {
               parsed.users.push(seedUser);
             }
@@ -199,7 +222,7 @@ class DataService {
     return initialState;
   }
 
-  private saveState(newState?: AppState) {
+  public saveState(newState?: AppState) {
     if (newState) {
       this.state = newState;
     }
@@ -1716,6 +1739,9 @@ class DataService {
     }
     const idx = this.state.users.findIndex(u => u.id === userId);
     if (idx === -1) throw new Error('Usuário não encontrado.');
+    if (this.state.users[idx].email?.toLowerCase() === 'zynecta@gmail.com') {
+      throw new Error('Não é permitido excluir o usuário Master principal do sistema (zynecta@gmail.com).');
+    }
     const deleted = this.state.users.splice(idx, 1)[0];
     this.logAudit(currentUser, 'EXCLUIR', 'Administração', `Usuário ${deleted.email} removido do sistema.`, JSON.stringify(deleted), null, 'GLOBAL');
     this.saveState();
@@ -2676,6 +2702,10 @@ class DataService {
       .map(c => this.getCostCenterComparison(c.id))
       .filter((comp): comp is CostCenterComparison => comp !== null);
     return list;
+  }
+
+  public getCostCenterComparisons(selectedBranch?: string): CostCenterComparison[] {
+    return this.getAllCostCentersComparison(selectedBranch);
   }
 }
 

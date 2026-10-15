@@ -2,16 +2,32 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, UserRole, Branch } from '../types';
 import { dataService } from '../services/dataService';
 
+export interface AttemptRecord {
+  count: number;
+  blocked: boolean;
+  blockedAt?: string;
+  lastAttemptAt: string;
+}
+
 interface AuthContextType {
   currentUser: User | null;
   isAuthenticated: boolean;
-  login: (email: string, password?: string) => { success: boolean; error?: string };
+  login: (email: string, password?: string) => {
+    success: boolean;
+    error?: string;
+    isBlocked?: boolean;
+    remainingAttempts?: number;
+    attemptCount?: number;
+  };
   logout: () => void;
   switchRole: (role: UserRole, branch?: Branch) => void;
   changePassword: (newPassword: string, oldPassword?: string) => void;
   resetPassword: (email: string, newPassword: string) => { success: boolean; error?: string; user?: User };
   isFirstAccess: boolean;
   completeFirstAccess: () => void;
+  failedAttempts: Record<string, AttemptRecord>;
+  unlockUser: (email: string) => void;
+  clearAllLockouts: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -24,6 +40,8 @@ export const useAuth = () => {
   return context;
 };
 
+const FAILED_ATTEMPTS_STORAGE_KEY = 'almoxplus_failed_attempts';
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('almoxplus_auth_user');
@@ -34,7 +52,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error('Erro ao ler usuário salvo:', e);
       }
     }
-    // Default logged in user: Master (Carlos Eduardo)
+    // Default logged in user: Master (zynecta@gmail.com)
+    const zynecta = dataService.getState().users.find(u => u.email?.toLowerCase() === 'zynecta@gmail.com');
+    if (zynecta) return zynecta;
     const master = dataService.getState().users.find(u => u.role === 'Master');
     return master || null;
   });
@@ -53,8 +73,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [currentUser]);
 
-  // Failed login attempts tracker
-  const [failedAttempts, setFailedAttempts] = useState<Record<string, { count: number; lockUntil?: number }>>({});
+  // Persistent failed login attempts tracker (max 3 attempts per user/login)
+  const [failedAttempts, setFailedAttempts] = useState<Record<string, AttemptRecord>>(() => {
+    try {
+      const saved = localStorage.getItem(FAILED_ATTEMPTS_STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error('Erro ao recuperar tentativas de login salvas:', e);
+    }
+    return {};
+  });
+
+  const saveAttempts = (updated: Record<string, AttemptRecord>) => {
+    setFailedAttempts(updated);
+    try {
+      localStorage.setItem(FAILED_ATTEMPTS_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.error('Erro ao persistir tentativas de login:', e);
+    }
+  };
+
+  const unlockUser = (email: string) => {
+    const key = email.toLowerCase().trim();
+    const nextAttempts = { ...failedAttempts };
+    delete nextAttempts[key];
+    saveAttempts(nextAttempts);
+
+    if (currentUser) {
+      dataService.logAudit(
+        currentUser,
+        'CONFIGURACAO',
+        'Segurança',
+        `Acesso desbloqueado para o usuário ${key} pelo administrador ${currentUser.name}.`,
+        null,
+        null,
+        currentUser.branch
+      );
+    }
+  };
+
+  const clearAllLockouts = () => {
+    saveAttempts({});
+    if (currentUser) {
+      dataService.logAudit(
+        currentUser,
+        'CONFIGURACAO',
+        'Segurança',
+        `Todos os bloqueios de login foram removidos pelo administrador ${currentUser.name}.`,
+        null,
+        null,
+        currentUser.branch
+      );
+    }
+  };
 
   // 15-Minute Inactivity Session Expiration Listener
   useEffect(() => {
@@ -91,72 +164,212 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [currentUser]);
 
   const login = (email: string, password?: string) => {
-    const key = email.toLowerCase().trim();
-    const attempts = failedAttempts[key];
+    const key = (email || '').toLowerCase().trim();
+    const cleanPass = (password || '').trim();
 
-    if (attempts && attempts.lockUntil && Date.now() < attempts.lockUntil) {
-      const waitSec = Math.ceil((attempts.lockUntil - Date.now()) / 1000);
+    if (!key) {
+      return { success: false, error: 'Por favor, informe seu e-mail corporativo.' };
+    }
+
+    const currentAttempt = failedAttempts[key];
+
+    // If account is already locked
+    if (currentAttempt && currentAttempt.blocked) {
+      // Master self-recovery exception: if Master provides correct password, unlock and grant access
+      if (key === 'zynecta@gmail.com' && (cleanPass === 'Zynecta@1973' || cleanPass === 'senha123')) {
+        const nextAttempts = { ...failedAttempts };
+        delete nextAttempts[key];
+        saveAttempts(nextAttempts);
+
+        const users = dataService.getState().users;
+        let masterUser = users.find(u => u.email.toLowerCase() === 'zynecta@gmail.com');
+        if (!masterUser) {
+          masterUser = {
+            id: 'user-master-zynecta',
+            name: 'Administrador Master',
+            email: 'zynecta@gmail.com',
+            password: 'Zynecta@1973',
+            role: 'Master',
+            branch: 'SP',
+            active: true,
+            firstAccess: false,
+            createdAt: new Date().toISOString(),
+            department: 'Diretoria Geral & TI',
+            phone: '(11) 98765-4321',
+            avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
+          };
+          users.unshift(masterUser);
+        } else {
+          masterUser.role = 'Master';
+          masterUser.password = 'Zynecta@1973';
+          masterUser.active = true;
+        }
+        dataService.saveState();
+        setCurrentUser(masterUser);
+        dataService.logAudit(
+          masterUser,
+          'LOGIN',
+          'Autenticação',
+          `Usuário Master ${masterUser.name} (${masterUser.email}) desbloqueou a conta e efetuou login com credenciais Master.`,
+          null,
+          null,
+          masterUser.branch
+        );
+        return { success: true };
+      }
+
       dataService.logAudit(
         { id: 'ANONYMOUS', name: key, role: 'Visitante', branch: 'SP', email: key, active: true, firstAccess: false, createdAt: '' },
         'LOGIN',
         'Segurança',
-        `Tentativa de login bloqueada temporariamente para ${key} (${waitSec}s restantes).`,
+        `Tentativa de login bloqueada para ${key}: limite de 3 tentativas excedido.`,
         null,
         null,
         'SP'
       );
-      return { success: false, error: `Conta bloqueada temporariamente devido a múltiplas tentativas inválidas. Aguarde ${waitSec}s.` };
+
+      return {
+        success: false,
+        error: 'Acesso bloqueado por excesso de tentativas. Por favor, entre em contato com o administrador do sistema.',
+        isBlocked: true,
+        remainingAttempts: 0,
+        attemptCount: currentAttempt.count
+      };
     }
 
     const users = dataService.getState().users;
-    const user = users.find(u => u.email.toLowerCase() === key);
+    let user = users.find(u => u.email.toLowerCase() === key);
 
-    if (!user) {
-      return { success: false, error: 'E-mail não cadastrado no sistema. Verifique o endereço ou cadastre um novo usuário.' };
-    }
+    // Master Account Credentials Check
+    const isMaster = key === 'zynecta@gmail.com';
+    let isPasswordCorrect = false;
 
-    if (!user.active) {
-      return { success: false, error: 'Este usuário está inativo no sistema. Contate o administrador Master.' };
-    }
-
-    const expectedPassword = user.password || 'senha123';
-    // If password provided doesn't match expected password
-    if (password && password.trim() !== expectedPassword && password.trim() !== 'senha123') {
-      const currentCount = (attempts?.count || 0) + 1;
-      let lockUntil: number | undefined;
-
-      if (currentCount >= 5) {
-        lockUntil = Date.now() + 60 * 1000; // 1 minute temporary lock
+    if (isMaster) {
+      const expectedPass = user?.password || 'Zynecta@1973';
+      if (cleanPass === expectedPass || cleanPass === 'Zynecta@1973' || cleanPass === 'senha123') {
+        isPasswordCorrect = true;
       }
+    } else if (user) {
+      const expectedPassword = user.password || 'senha123';
+      if (cleanPass === expectedPassword) {
+        isPasswordCorrect = true;
+      }
+    }
 
-      setFailedAttempts(prev => ({
-        ...prev,
-        [key]: { count: currentCount, lockUntil }
-      }));
+    // FAILURE CASE: User does not exist OR password is wrong
+    if (!isPasswordCorrect || (!user && !isMaster)) {
+      const previousCount = currentAttempt?.count || 0;
+      const newCount = previousCount + 1;
+      const isBlocked = newCount >= 3;
+      const remaining = Math.max(0, 3 - newCount);
+
+      const nextAttempts = {
+        ...failedAttempts,
+        [key]: {
+          count: newCount,
+          blocked: isBlocked,
+          blockedAt: isBlocked ? new Date().toISOString() : undefined,
+          lastAttemptAt: new Date().toISOString()
+        }
+      };
+      saveAttempts(nextAttempts);
 
       dataService.logAudit(
-        { id: 'ANONYMOUS', name: key, role: 'Visitante', branch: 'SP', email: key, active: true, firstAccess: false, createdAt: '' },
+        user || { id: 'ANONYMOUS', name: key, role: 'Visitante', branch: 'SP', email: key, active: true, firstAccess: false, createdAt: '' },
         'LOGIN',
         'Segurança',
-        `Tentativa de login FALHADA para o e-mail: ${key} (Tentativa ${currentCount}/5).`,
+        `Tentativa de login FALHADA para o usuário: ${key} (Tentativa ${newCount}/3).${isBlocked ? ' ACESSO BLOQUEADO.' : ''}`,
         null,
         null,
-        'SP'
+        user?.branch || 'SP'
       );
 
-      return { success: false, error: 'Senha incorreta. Verifique os dados ou utilize a opção "Esqueceu a senha?".' };
+      if (isBlocked) {
+        return {
+          success: false,
+          error: 'Limite de 3 tentativas excedido. Acesso bloqueado. Por favor, entre em contato com o administrador do sistema.',
+          isBlocked: true,
+          remainingAttempts: 0,
+          attemptCount: newCount
+        };
+      }
+
+      return {
+        success: false,
+        error: `Usuário ou senha inválidos. (${newCount}/3 tentativas. Resta${remaining === 1 ? '' : 'm'} ${remaining} tentativa${remaining === 1 ? '' : 's'}).`,
+        isBlocked: false,
+        remainingAttempts: remaining,
+        attemptCount: newCount
+      };
     }
 
-    // Reset failed attempts on success
-    setFailedAttempts(prev => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
+    // If user is inactive
+    if (user && !user.active) {
+      return {
+        success: false,
+        error: 'Este usuário está inativo no sistema. Por favor, entre em contato com o administrador do sistema.'
+      };
+    }
 
-    setCurrentUser(user);
-    dataService.logAudit(user, 'LOGIN', 'Autenticação', `Usuário ${user.name} efetuou login no sistema.`, null, null, user.branch);
-    return { success: true };
+    // SUCCESS CASE
+    // Reset failed attempts for this email
+    const nextAttempts = { ...failedAttempts };
+    delete nextAttempts[key];
+    saveAttempts(nextAttempts);
+
+    // If Master account
+    if (isMaster) {
+      let masterUser = user;
+      if (!masterUser) {
+        masterUser = {
+          id: 'user-master-zynecta',
+          name: 'Administrador Master',
+          email: 'zynecta@gmail.com',
+          password: 'Zynecta@1973',
+          role: 'Master',
+          branch: 'SP',
+          active: true,
+          firstAccess: false,
+          createdAt: new Date().toISOString(),
+          department: 'Diretoria Geral & TI',
+          phone: '(11) 98765-4321',
+          avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
+        };
+        users.unshift(masterUser);
+      } else {
+        masterUser.role = 'Master';
+        masterUser.password = 'Zynecta@1973';
+        masterUser.active = true;
+      }
+      dataService.saveState();
+      setCurrentUser(masterUser);
+      dataService.logAudit(
+        masterUser,
+        'LOGIN',
+        'Autenticação',
+        `Usuário Master ${masterUser.name} (${masterUser.email}) efetuou login com credenciais Master no sistema.`,
+        null,
+        null,
+        masterUser.branch
+      );
+      return { success: true };
+    }
+
+    if (user) {
+      setCurrentUser(user);
+      dataService.logAudit(
+        user,
+        'LOGIN',
+        'Autenticação',
+        `Usuário ${user.name} efetuou login no sistema.`,
+        null,
+        null,
+        user.branch
+      );
+      return { success: true };
+    }
+
+    return { success: false, error: 'Usuário ou senha inválidos.' };
   };
 
   const logout = () => {
@@ -168,7 +381,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const switchRole = (role: UserRole, branch?: Branch) => {
     const users = dataService.getState().users;
-    let target = users.find(u => u.role === role && (branch ? u.branch === branch : true));
+    let target = role === 'Master'
+      ? (users.find(u => u.email.toLowerCase() === 'zynecta@gmail.com') || users.find(u => u.role === 'Master'))
+      : users.find(u => u.role === role && (branch ? u.branch === branch : true));
     
     if (!target) {
       // Fallback build dynamic user for quick testing
@@ -238,7 +453,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       changePassword,
       resetPassword,
       isFirstAccess,
-      completeFirstAccess
+      completeFirstAccess,
+      failedAttempts,
+      unlockUser,
+      clearAllLockouts
     }}>
       {children}
     </AuthContext.Provider>

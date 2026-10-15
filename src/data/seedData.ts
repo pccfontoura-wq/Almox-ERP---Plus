@@ -117,6 +117,20 @@ export const INITIAL_BRANCHES: BranchInfo[] = [
 
 export const INITIAL_USERS: User[] = [
   {
+    id: 'user-master-zynecta',
+    name: 'Administrador Master',
+    email: 'zynecta@gmail.com',
+    password: 'Zynecta@1973',
+    role: 'Master',
+    branch: 'SP',
+    active: true,
+    firstAccess: false,
+    createdAt: '2025-01-01T08:00:00Z',
+    department: 'Diretoria Geral & TI',
+    phone: '(11) 98765-4321',
+    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
+  },
+  {
     id: 'user-master-1',
     name: 'Carlos Eduardo Silva',
     email: 'admin@almoxplus.com.br',

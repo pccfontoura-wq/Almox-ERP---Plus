@@ -306,7 +306,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar, onNavigateToTab
         </Box>
 
         <MenuItem onClick={() => handleQuickRoleChange('Master', 'SP')} className="text-xs py-2 rounded-lg font-medium">
-          👑 <span className="ml-1.5 font-bold">Master</span> <span className="ml-auto text-[10px] text-slate-400">(Acesso Total)</span>
+          👑 <span className="ml-1.5 font-bold">Master (Zynecta)</span> <span className="ml-auto text-[10px] text-slate-400">(Acesso Total)</span>
         </MenuItem>
 
         <MenuItem onClick={() => handleQuickRoleChange('Almoxarife', 'SP')} className="text-xs py-2 rounded-lg font-medium">
