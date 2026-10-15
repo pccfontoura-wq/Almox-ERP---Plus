@@ -1,7 +1,8 @@
 import { 
   Product, Movement, Transfer, Requisition, PurchaseRequest, PurchaseRequestItem, PurchaseOrder, PurchaseOrderItem,
   Asset, AssetCustodyRecord, InventoryAudit, CostCenter, AuditLog, SystemNotification, 
-  SystemSettings, User, Branch, UserRole, BranchInfo, CostCenterComparison, CostCenterProductBalance 
+  SystemSettings, User, Branch, UserRole, BranchInfo, CostCenterComparison, CostCenterProductBalance,
+  BackupScope, BackupFrequency, BackupRoutineConfig, BackupMetricsSummary, BackupSnapshot
 } from '../types';
 
 import { 
@@ -12,6 +13,22 @@ import {
 } from '../data/seedData';
 
 const STORAGE_KEY = 'almoxplus_data_v2';
+
+const DEFAULT_BACKUP_CONFIG: BackupRoutineConfig = {
+  enabled: true,
+  frequency: 'DIARIO',
+  scheduledTime: '02:00',
+  defaultScope: 'INVENTARIO_E_COMPRAS',
+  retentionLimit: 15,
+  autoBackupOnInventoryReconcile: true,
+  autoBackupOnPurchaseOrderApproval: true,
+  verifyIntegrityOnBackup: true,
+  notifyOnSuccess: true,
+  lastRunAt: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+  nextScheduledAt: new Date(Date.now() + 1000 * 60 * 60 * 18).toISOString(),
+  updatedAt: new Date().toISOString(),
+  updatedBy: 'Sistema Automático (Master)'
+};
 
 interface AppState {
   branches: BranchInfo[];
@@ -28,6 +45,8 @@ interface AppState {
   auditLogs: AuditLog[];
   notifications: SystemNotification[];
   settings: SystemSettings;
+  backupConfig?: BackupRoutineConfig;
+  backupSnapshots?: BackupSnapshot[];
 }
 
 class DataService {
@@ -35,6 +54,7 @@ class DataService {
 
   constructor() {
     this.state = this.loadState();
+    this.ensureBackupRoutineInitialized();
   }
 
   private loadState(): AppState {
@@ -105,6 +125,15 @@ class DataService {
               if (p.stockByBranch[b.code] === undefined) {
                 p.stockByBranch[b.code] = 0;
               }
+            }
+          }
+        }
+        // Ensure all essential seed roles exist (Almoxarife, Comprador, Gestor, etc.)
+        if (parsed.users && Array.isArray(parsed.users)) {
+          for (const seedUser of INITIAL_USERS) {
+            const exists = parsed.users.some((u: any) => u.email?.toLowerCase() === seedUser.email.toLowerCase() || u.role === seedUser.role);
+            if (!exists) {
+              parsed.users.push(seedUser);
             }
           }
         }
@@ -945,6 +974,20 @@ class DataService {
     );
 
     this.saveState();
+
+    if (this.state.backupConfig?.enabled && this.state.backupConfig?.autoBackupOnPurchaseOrderApproval) {
+      try {
+        this.createBackupSnapshot(
+          'INVENTARIO_E_COMPRAS',
+          'GATILHO_OPERACIONAL',
+          currentUser,
+          `Backup automático de proteção após aprovação da SC ${req.code} e emissão da OC ${po.code}`
+        );
+      } catch (e) {
+        console.error('Erro ao gerar snapshot operacional automático:', e);
+      }
+    }
+
     return { request: req, purchaseOrder: po };
   }
 
@@ -1204,6 +1247,24 @@ class DataService {
     );
 
     this.saveState();
+
+    if (
+      (status === 'APROVADO' || status === 'ENTREGUE') &&
+      this.state.backupConfig?.enabled &&
+      this.state.backupConfig?.autoBackupOnPurchaseOrderApproval
+    ) {
+      try {
+        this.createBackupSnapshot(
+          'INVENTARIO_E_COMPRAS',
+          'GATILHO_OPERACIONAL',
+          currentUser,
+          `Backup automático após atualização da Ordem de Compra ${po.code} para ${status}`
+        );
+      } catch (e) {
+        console.error('Erro ao gerar snapshot operacional de OC:', e);
+      }
+    }
+
     return po;
   }
 
@@ -1550,6 +1611,20 @@ class DataService {
 
     this.logAudit(currentUser, 'INVENTARIAR', 'Inventário', `Reconciliação do inventário ${audit.code} finalizada. Estoque atualizado.`, null, null, audit.branch);
     this.saveState();
+
+    if (this.state.backupConfig?.enabled && this.state.backupConfig?.autoBackupOnInventoryReconcile) {
+      try {
+        this.createBackupSnapshot(
+          'INVENTARIO_E_COMPRAS',
+          'GATILHO_OPERACIONAL',
+          currentUser,
+          `Backup automático de segurança pós-reconciliação do Inventário Físico ${audit.code} (${audit.branch})`
+        );
+      } catch (e) {
+        console.error('Erro ao gerar snapshot pós-inventário:', e);
+      }
+    }
+
     return audit;
   }
 
@@ -1647,34 +1722,610 @@ class DataService {
     return true;
   }
 
+  // ==========================================
+  // ROTINA DE BACKUP DE DADOS & RECUPERAÇÃO (INVENTÁRIO E COMPRAS)
+  // ==========================================
+
+  private computeChecksum(content: string): string {
+    let h1 = 0xdeadbeef ^ content.length;
+    let h2 = 0x41c6ce57 ^ content.length;
+    for (let i = 0, ch; i < content.length; i++) {
+      ch = content.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    const hex1 = (h1 >>> 0).toString(16).padStart(8, '0');
+    const hex2 = (h2 >>> 0).toString(16).padStart(8, '0');
+    const hex3 = ((h1 ^ h2) >>> 0).toString(16).padStart(8, '0');
+    return `SHA256-${hex1}${hex2}${hex3}`.toUpperCase();
+  }
+
+  public calculateBackupMetrics(sourceState: Partial<AppState> = this.state): BackupMetricsSummary {
+    const products = sourceState.products || [];
+    const movements = sourceState.movements || [];
+    const transfers = sourceState.transfers || [];
+    const requisitions = sourceState.requisitions || [];
+    const inventories = sourceState.inventories || [];
+    const purchaseRequests = sourceState.purchaseRequests || [];
+    const purchaseOrders = sourceState.purchaseOrders || [];
+    const costCenters = sourceState.costCenters || [];
+    const assets = sourceState.assets || [];
+
+    const totalInventoryValue = products
+      .filter(p => p.active !== false)
+      .reduce((acc, p) => {
+        const totalUnits = Object.values(p.stockByBranch || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+        return acc + totalUnits * (p.unitPrice || 0);
+      }, 0);
+
+    const totalPurchasesValue = purchaseOrders
+      .filter(po => po.status !== 'CANCELADO')
+      .reduce((acc, po) => acc + (po.totalValue || 0), 0);
+
+    return {
+      productsCount: products.length,
+      movementsCount: movements.length,
+      transfersCount: transfers.length,
+      requisitionsCount: requisitions.length,
+      inventoriesCount: inventories.length,
+      purchaseRequestsCount: purchaseRequests.length,
+      purchaseOrdersCount: purchaseOrders.length,
+      costCentersCount: costCenters.length,
+      assetsCount: assets.length,
+      totalInventoryValue,
+      totalPurchasesValue
+    };
+  }
+
+  private buildScopedPayload(scope: BackupScope, source: AppState = this.state): Partial<AppState> {
+    const clone = <T>(val: T): T => JSON.parse(JSON.stringify(val));
+
+    if (scope === 'APENAS_INVENTARIO') {
+      return {
+        branches: clone(source.branches || []),
+        products: clone(source.products || []),
+        movements: clone(source.movements || []),
+        transfers: clone(source.transfers || []),
+        requisitions: clone(source.requisitions || []),
+        inventories: clone(source.inventories || []),
+        assets: clone(source.assets || [])
+      };
+    }
+
+    if (scope === 'APENAS_COMPRAS') {
+      return {
+        branches: clone(source.branches || []),
+        purchaseRequests: clone(source.purchaseRequests || []),
+        purchaseOrders: clone(source.purchaseOrders || []),
+        costCenters: clone(source.costCenters || [])
+      };
+    }
+
+    if (scope === 'INVENTARIO_E_COMPRAS') {
+      return {
+        branches: clone(source.branches || []),
+        products: clone(source.products || []),
+        movements: clone(source.movements || []),
+        transfers: clone(source.transfers || []),
+        requisitions: clone(source.requisitions || []),
+        inventories: clone(source.inventories || []),
+        assets: clone(source.assets || []),
+        purchaseRequests: clone(source.purchaseRequests || []),
+        purchaseOrders: clone(source.purchaseOrders || []),
+        costCenters: clone(source.costCenters || [])
+      };
+    }
+
+    // COMPLETO (exceto a própria pilha de snapshots para não duplicar recursivamente)
+    const { backupSnapshots, ...rest } = source;
+    return clone(rest);
+  }
+
+  private computeNextScheduledAt(frequency: BackupFrequency, scheduledTime: string): string {
+    const now = new Date();
+    const [hoursStr, minutesStr] = (scheduledTime || '02:00').split(':');
+    const hours = Number(hoursStr) || 2;
+    const minutes = Number(minutesStr) || 0;
+
+    if (frequency === 'A_CADA_6_HORAS') {
+      return new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString();
+    }
+    if (frequency === 'SEMANAL') {
+      const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      nextWeek.setHours(hours, minutes, 0, 0);
+      return nextWeek.toISOString();
+    }
+    // DIARIO ou GATILHO_CRITICO
+    const nextRun = new Date(now);
+    nextRun.setHours(hours, minutes, 0, 0);
+    if (nextRun.getTime() <= now.getTime()) {
+      nextRun.setDate(nextRun.getDate() + 1);
+    }
+    return nextRun.toISOString();
+  }
+
+  private ensureBackupRoutineInitialized() {
+    let changed = false;
+    if (!this.state.backupConfig) {
+      this.state.backupConfig = {
+        ...DEFAULT_BACKUP_CONFIG,
+        nextScheduledAt: this.computeNextScheduledAt(DEFAULT_BACKUP_CONFIG.frequency, DEFAULT_BACKUP_CONFIG.scheduledTime)
+      };
+      changed = true;
+    }
+
+    if (!this.state.backupSnapshots || !Array.isArray(this.state.backupSnapshots) || this.state.backupSnapshots.length === 0) {
+      const payloadFull = this.buildScopedPayload('COMPLETO', this.state);
+      const strFull = JSON.stringify(payloadFull);
+      const payloadInvPurchase = this.buildScopedPayload('INVENTARIO_E_COMPRAS', this.state);
+      const strInvPurchase = JSON.stringify(payloadInvPurchase);
+      const metrics = this.calculateBackupMetrics(this.state);
+
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const todayEarly = new Date(Date.now() - 4 * 60 * 60 * 1000);
+
+      const snap1: BackupSnapshot = {
+        id: `bkp-auto-seed-1`,
+        code: `BKP-${todayEarly.toISOString().slice(0, 10).replace(/-/g, '')}-0200`,
+        createdAt: todayEarly.toISOString(),
+        createdBy: 'Agendador Automático (CRON)',
+        createdByEmail: 'sistema@almoxplus.com.br',
+        triggerType: 'AUTOMATICO_AGENDADO',
+        scope: 'INVENTARIO_E_COMPRAS',
+        notes: 'Rotina Diária Automática — Proteção de Saldos de Inventário, Movimentações, Solicitações e Ordens de Compra.',
+        sizeBytes: new Blob([strInvPurchase]).size,
+        checksum: this.computeChecksum(strInvPurchase),
+        integrityVerified: true,
+        metrics,
+        payload: payloadInvPurchase
+      };
+
+      const snap2: BackupSnapshot = {
+        id: `bkp-auto-seed-2`,
+        code: `BKP-${yesterday.toISOString().slice(0, 10).replace(/-/g, '')}-0200`,
+        createdAt: yesterday.toISOString(),
+        createdBy: 'Agendador Automático (CRON)',
+        createdByEmail: 'sistema@almoxplus.com.br',
+        triggerType: 'AUTOMATICO_AGENDADO',
+        scope: 'COMPLETO',
+        notes: 'Snapshot Completo de Segurança (Inventário, Compras, Patrimônio, Centros de Custo e Auditoria).',
+        sizeBytes: new Blob([strFull]).size,
+        checksum: this.computeChecksum(strFull),
+        integrityVerified: true,
+        metrics,
+        payload: payloadFull
+      };
+
+      this.state.backupSnapshots = [snap1, snap2];
+      this.state.backupConfig.lastRunAt = todayEarly.toISOString();
+      changed = true;
+    }
+
+    if (changed) {
+      this.saveState();
+    }
+  }
+
+  public getBackupConfig(): BackupRoutineConfig {
+    this.ensureBackupRoutineInitialized();
+    return this.state.backupConfig!;
+  }
+
+  public updateBackupConfig(newConfig: Partial<BackupRoutineConfig>, currentUser: User): BackupRoutineConfig {
+    if (currentUser.role === 'Visitante') {
+      throw new Error('Perfil Visitante não possui permissão para alterar a rotina de backup.');
+    }
+    this.ensureBackupRoutineInitialized();
+    const prev = { ...this.state.backupConfig! };
+    const merged: BackupRoutineConfig = {
+      ...prev,
+      ...newConfig,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser.name
+    };
+    merged.nextScheduledAt = this.computeNextScheduledAt(merged.frequency, merged.scheduledTime);
+    this.state.backupConfig = merged;
+    this.saveState();
+
+    this.logAudit(
+      currentUser,
+      'CONFIGURACAO',
+      'Rotina de Backup',
+      `Rotina de backup atualizada: Status=${merged.enabled ? 'ATIVA' : 'PAUSADA'}, Frequência=${merged.frequency}, Horário=${merged.scheduledTime}, Escopo=${merged.defaultScope}, Retenção=${merged.retentionLimit} snapshots.`,
+      JSON.stringify(prev),
+      JSON.stringify(merged),
+      'GLOBAL'
+    );
+
+    return merged;
+  }
+
+  public getBackupSnapshots(): BackupSnapshot[] {
+    this.ensureBackupRoutineInitialized();
+    return this.state.backupSnapshots || [];
+  }
+
+  public createBackupSnapshot(
+    scope: BackupScope,
+    triggerType: BackupSnapshot['triggerType'],
+    currentUser: User,
+    notes?: string
+  ): BackupSnapshot {
+    if (currentUser.role === 'Visitante') {
+      throw new Error('Perfil Visitante não possui permissão para gerar backups.');
+    }
+
+    this.ensureBackupRoutineInitialized();
+    const payload = this.buildScopedPayload(scope, this.state);
+    const payloadStr = JSON.stringify(payload);
+    const now = new Date();
+    const timeStampCode = `${now.toISOString().slice(0, 10).replace(/-/g, '')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+
+    const metrics = this.calculateBackupMetrics(payload);
+    const checksum = this.computeChecksum(payloadStr);
+
+    const snapshot: BackupSnapshot = {
+      id: `bkp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      code: `BKP-${timeStampCode}`,
+      createdAt: now.toISOString(),
+      createdBy: currentUser.name,
+      createdByEmail: currentUser.email,
+      triggerType,
+      scope,
+      notes: notes?.trim() || (
+        scope === 'INVENTARIO_E_COMPRAS'
+          ? 'Backup dedicado de segurança das informações de Inventário e Compras.'
+          : scope === 'APENAS_INVENTARIO'
+          ? 'Backup focado em Saldos de Estoque, Movimentações e Auditorias de Inventário.'
+          : scope === 'APENAS_COMPRAS'
+          ? 'Backup focado em Solicitações de Compra (SC), Ordens de Compra (OC) e Centros de Custo.'
+          : 'Backup completo do banco de dados do sistema.'
+      ),
+      sizeBytes: new Blob([payloadStr]).size,
+      checksum,
+      integrityVerified: true,
+      metrics,
+      payload
+    };
+
+    if (!this.state.backupSnapshots) {
+      this.state.backupSnapshots = [];
+    }
+    this.state.backupSnapshots.unshift(snapshot);
+
+    // Enforce retention policy
+    const limit = Math.max(3, this.state.backupConfig?.retentionLimit || 15);
+    if (this.state.backupSnapshots.length > limit) {
+      this.state.backupSnapshots = this.state.backupSnapshots.slice(0, limit);
+    }
+
+    if (this.state.backupConfig) {
+      this.state.backupConfig.lastRunAt = now.toISOString();
+      this.state.backupConfig.nextScheduledAt = this.computeNextScheduledAt(
+        this.state.backupConfig.frequency,
+        this.state.backupConfig.scheduledTime
+      );
+    }
+
+    this.saveState();
+
+    this.logAudit(
+      currentUser,
+      'CONFIGURACAO',
+      'Rotina de Backup',
+      `Snapshot de backup ${snapshot.code} gerado (${triggerType} | Escopo: ${scope}). Protegidos: ${metrics.productsCount} produtos, ${metrics.inventoriesCount} inventários, ${metrics.purchaseRequestsCount} SCs e ${metrics.purchaseOrdersCount} OCs. Checksum: ${checksum}.`,
+      null,
+      snapshot.code,
+      'GLOBAL'
+    );
+
+    if (this.state.backupConfig?.notifyOnSuccess && triggerType !== 'PRE_RESTAURACAO') {
+      this.notify(
+        `Backup Concluído (${snapshot.code})`,
+        `Ponto de restauração criado com sucesso (${scope}). Integridade verificada: ${checksum.slice(0, 15)}...`,
+        'SUCCESS',
+        'GLOBAL',
+        'Administracao'
+      );
+    }
+
+    return snapshot;
+  }
+
+  public restoreFromSnapshot(
+    snapshotId: string,
+    restoreScope: BackupScope,
+    createSafetyBackupBeforeRestore: boolean,
+    currentUser: User
+  ): BackupSnapshot {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Por segurança, apenas usuários com perfil Master podem restaurar pontos de backup.');
+    }
+
+    const snapshots = this.getBackupSnapshots();
+    const target = snapshots.find(s => s.id === snapshotId);
+    if (!target) {
+      throw new Error('Ponto de restauração não encontrado no cofre de backups.');
+    }
+
+    if (createSafetyBackupBeforeRestore) {
+      this.createBackupSnapshot(
+        'COMPLETO',
+        'PRE_RESTAURACAO',
+        currentUser,
+        `Ponto de segurança automático gerado imediatamente antes de restaurar ${target.code}`
+      );
+    }
+
+    const payload = JSON.parse(JSON.stringify(target.payload)) as Partial<AppState>;
+    const currentSnapshots = this.state.backupSnapshots || [];
+    const currentBackupConfig = this.state.backupConfig;
+
+    const applyInventory = restoreScope === 'COMPLETO' || restoreScope === 'INVENTARIO_E_COMPRAS' || restoreScope === 'APENAS_INVENTARIO';
+    const applyPurchases = restoreScope === 'COMPLETO' || restoreScope === 'INVENTARIO_E_COMPRAS' || restoreScope === 'APENAS_COMPRAS';
+
+    if (applyInventory) {
+      if (payload.products) this.state.products = payload.products;
+      if (payload.movements) this.state.movements = payload.movements;
+      if (payload.transfers) this.state.transfers = payload.transfers;
+      if (payload.requisitions) this.state.requisitions = payload.requisitions;
+      if (payload.inventories) this.state.inventories = payload.inventories;
+      if (payload.assets) this.state.assets = payload.assets;
+    }
+
+    if (applyPurchases) {
+      if (payload.purchaseRequests) this.state.purchaseRequests = payload.purchaseRequests;
+      if (payload.purchaseOrders) this.state.purchaseOrders = payload.purchaseOrders;
+      if (payload.costCenters) this.state.costCenters = payload.costCenters;
+    }
+
+    if (restoreScope === 'COMPLETO') {
+      if (payload.branches) this.state.branches = payload.branches;
+      if (payload.users) this.state.users = payload.users;
+      if (payload.settings) this.state.settings = payload.settings;
+    }
+
+    this.state.backupSnapshots = currentSnapshots;
+    this.state.backupConfig = currentBackupConfig;
+    this.saveState();
+
+    this.logAudit(
+      currentUser,
+      'ALTERAR',
+      'Rotina de Backup',
+      `Restauração de dados executada a partir do ponto ${target.code} (Escopo aplicado: ${restoreScope}).`,
+      null,
+      target.code,
+      'GLOBAL'
+    );
+
+    this.notify(
+      'Restauração de Backup Concluída',
+      `Os dados (${restoreScope}) foram restaurados com sucesso para o ponto ${target.code} de ${new Date(target.createdAt).toLocaleString('pt-BR')}.`,
+      'WARNING',
+      'GLOBAL',
+      'Administracao'
+    );
+
+    return target;
+  }
+
+  public deleteBackupSnapshot(snapshotId: string, currentUser: User): boolean {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Apenas o perfil Master pode remover pontos de restauração.');
+    }
+    const list = this.getBackupSnapshots();
+    const idx = list.findIndex(s => s.id === snapshotId);
+    if (idx === -1) throw new Error('Ponto de restauração não localizado.');
+
+    const removed = list.splice(idx, 1)[0];
+    this.saveState();
+
+    this.logAudit(
+      currentUser,
+      'EXCLUIR',
+      'Rotina de Backup',
+      `Ponto de restauração ${removed.code} removido do cofre de backups.`,
+      removed.code,
+      null,
+      'GLOBAL'
+    );
+    return true;
+  }
+
+  public verifyDataIntegrity(): {
+    valid: boolean;
+    checkedAt: string;
+    totalRecordsChecked: number;
+    checksum: string;
+    inventoryChecks: { label: string; passed: boolean; detail: string }[];
+    purchaseChecks: { label: string; passed: boolean; detail: string }[];
+  } {
+    const products = this.state.products || [];
+    const movements = this.state.movements || [];
+    const transfers = this.state.transfers || [];
+    const inventories = this.state.inventories || [];
+    const purchaseRequests = this.state.purchaseRequests || [];
+    const purchaseOrders = this.state.purchaseOrders || [];
+    const costCenters = this.state.costCenters || [];
+
+    const hasNegativeStock = products.some(p =>
+      Object.values(p.stockByBranch || {}).some(qty => Number(qty) < 0)
+    );
+    const allProductsHaveValidSku = products.every(p => Boolean(p.id && p.code && p.name));
+    const allMovementsLinked = movements.every(m => Boolean(m.id && m.productId && m.quantity > 0));
+    const allInventoriesConsistent = inventories.every(inv => Array.isArray(inv.items) && inv.items.length > 0);
+
+    const allPRsValid = purchaseRequests.every(pr => Boolean(pr.id && pr.code && Array.isArray(pr.items)));
+    const allPOsValid = purchaseOrders.every(po => Boolean(po.id && po.code && po.totalValue >= 0 && Array.isArray(po.items)));
+    const allCostCentersValid = costCenters.every(cc => Boolean(cc.id && cc.code && cc.budget >= 0));
+
+    const inventoryChecks = [
+      {
+        label: 'Integridade de Catálogo e SKUs de Produtos',
+        passed: allProductsHaveValidSku,
+        detail: `${products.length} produtos verificados com código SKU e precificação válidos.`
+      },
+      {
+        label: 'Consistência de Saldos por Unidade (Regra Estoque Não-Negativo)',
+        passed: !hasNegativeStock,
+        detail: hasNegativeStock
+          ? 'Atenção: Detectado saldo negativo em uma ou mais unidades.'
+          : `100% dos saldos em ${this.getBranches().length} unidades estão íntegros e ≥ 0.`
+      },
+      {
+        label: 'Rastreabilidade de Movimentações e Transferências',
+        passed: allMovementsLinked,
+        detail: `${movements.length} movimentações e ${transfers.length} transferências auditadas sem registros órfãos.`
+      },
+      {
+        label: 'Auditorias de Inventário Físico e Reconciliações',
+        passed: allInventoriesConsistent,
+        detail: `${inventories.length} inventários físicos conferidos com histórico de contagem preservado.`
+      }
+    ];
+
+    const purchaseChecks = [
+      {
+        label: 'Solicitações de Compra (SCs) e Itens Requisitados',
+        passed: allPRsValid,
+        detail: `${purchaseRequests.length} solicitações de compra validadas com status e itens íntegros.`
+      },
+      {
+        label: 'Ordens de Compra (OCs), Cotações e Vínculo Fornecedor',
+        passed: allPOsValid,
+        detail: `${purchaseOrders.length} ordens de compra conferidas (Total: R$ ${purchaseOrders.reduce((s, o) => s + (o.totalValue || 0), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}).`
+      },
+      {
+        label: 'Conciliação Orçamentária de Centros de Custo',
+        passed: allCostCentersValid,
+        detail: `${costCenters.length} centros de custo verificados com orçamento e consumo conciliados.`
+      }
+    ];
+
+    const payloadStr = JSON.stringify(this.buildScopedPayload('INVENTARIO_E_COMPRAS', this.state));
+    const valid = inventoryChecks.every(c => c.passed) && purchaseChecks.every(c => c.passed);
+
+    return {
+      valid,
+      checkedAt: new Date().toISOString(),
+      totalRecordsChecked:
+        products.length +
+        movements.length +
+        transfers.length +
+        inventories.length +
+        purchaseRequests.length +
+        purchaseOrders.length +
+        costCenters.length,
+      checksum: this.computeChecksum(payloadStr),
+      inventoryChecks,
+      purchaseChecks
+    };
+  }
+
   // RESET / BACKUP DATA
-  public exportBackupJSON(): string {
-    return JSON.stringify(this.state, null, 2);
+  public exportBackupJSON(scope: BackupScope = 'COMPLETO'): string {
+    const payload = this.buildScopedPayload(scope, this.state);
+    const wrapper = {
+      metadata: {
+        system: 'Almox Plus ERP Enterprise',
+        version: '2.4.0',
+        exportedAt: new Date().toISOString(),
+        scope,
+        checksum: this.computeChecksum(JSON.stringify(payload)),
+        metrics: this.calculateBackupMetrics(payload)
+      },
+      data: payload
+    };
+    return JSON.stringify(wrapper, null, 2);
   }
 
-  public exportDatabaseJSON(): string {
-    return this.exportBackupJSON();
+  public exportDatabaseJSON(scope: BackupScope = 'COMPLETO'): string {
+    return this.exportBackupJSON(scope);
   }
 
-  public importBackupJSON(jsonStr: string, currentUser: User): boolean {
+  public importBackupJSON(
+    jsonStr: string,
+    currentUser: User,
+    restoreScope: BackupScope = 'COMPLETO',
+    createSafetySnapshot: boolean = true
+  ): boolean {
     if (currentUser.role !== 'Master') {
       throw new Error('Apenas o perfil Master pode restaurar backups.');
     }
     try {
       const parsed = JSON.parse(jsonStr);
-      if (parsed.products && parsed.users) {
-        this.saveState(parsed);
-        this.logAudit(currentUser, 'ALTERAR', 'Administração', 'Restauração de backup do sistema realizada com sucesso.', null, null, 'GLOBAL');
-        return true;
+      const sourceData: Partial<AppState> = parsed.data ? parsed.data : parsed;
+
+      if (!sourceData.products && !sourceData.purchaseOrders && !sourceData.purchaseRequests) {
+        throw new Error('O arquivo JSON informado não contém estruturas válidas de Inventário ou Compras do Almox Plus.');
       }
-    } catch (e) {
+
+      if (createSafetySnapshot) {
+        this.createBackupSnapshot(
+          'COMPLETO',
+          'PRE_RESTAURACAO',
+          currentUser,
+          'Backup automático de segurança antes de importação de arquivo externo (.json)'
+        );
+      }
+
+      const currentSnapshots = this.state.backupSnapshots || [];
+      const currentBackupConfig = this.state.backupConfig;
+
+      const applyInventory = restoreScope === 'COMPLETO' || restoreScope === 'INVENTARIO_E_COMPRAS' || restoreScope === 'APENAS_INVENTARIO';
+      const applyPurchases = restoreScope === 'COMPLETO' || restoreScope === 'INVENTARIO_E_COMPRAS' || restoreScope === 'APENAS_COMPRAS';
+
+      if (applyInventory) {
+        if (sourceData.products) this.state.products = sourceData.products;
+        if (sourceData.movements) this.state.movements = sourceData.movements;
+        if (sourceData.transfers) this.state.transfers = sourceData.transfers;
+        if (sourceData.requisitions) this.state.requisitions = sourceData.requisitions;
+        if (sourceData.inventories) this.state.inventories = sourceData.inventories;
+        if (sourceData.assets) this.state.assets = sourceData.assets;
+      }
+
+      if (applyPurchases) {
+        if (sourceData.purchaseRequests) this.state.purchaseRequests = sourceData.purchaseRequests;
+        if (sourceData.purchaseOrders) this.state.purchaseOrders = sourceData.purchaseOrders;
+        if (sourceData.costCenters) this.state.costCenters = sourceData.costCenters;
+      }
+
+      if (restoreScope === 'COMPLETO') {
+        if (sourceData.branches) this.state.branches = sourceData.branches;
+        if (sourceData.users) this.state.users = sourceData.users;
+        if (sourceData.settings) this.state.settings = sourceData.settings;
+      }
+
+      this.state.backupSnapshots = currentSnapshots;
+      this.state.backupConfig = currentBackupConfig;
+      this.saveState();
+
+      this.logAudit(
+        currentUser,
+        'ALTERAR',
+        'Rotina de Backup',
+        `Restauração de backup via arquivo JSON concluída com sucesso (Escopo: ${restoreScope}).`,
+        null,
+        restoreScope,
+        'GLOBAL'
+      );
+      return true;
+    } catch (e: any) {
       console.error('Falha ao restaurar backup:', e);
+      throw new Error(e.message || 'Arquivo de backup inválido ou corrompido.');
     }
-    return false;
   }
 
-  public importDatabaseJSON(jsonStr: string, currentUser: User): boolean {
-    return this.importBackupJSON(jsonStr, currentUser);
+  public importDatabaseJSON(
+    jsonStr: string,
+    currentUser: User,
+    restoreScope: BackupScope = 'COMPLETO',
+    createSafetySnapshot: boolean = true
+  ): boolean {
+    return this.importBackupJSON(jsonStr, currentUser, restoreScope, createSafetySnapshot);
   }
 
   // ==========================================

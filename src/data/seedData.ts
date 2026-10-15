@@ -183,6 +183,45 @@ export const INITIAL_USERS: User[] = [
     phone: '(61) 98111-2233'
   },
   {
+    id: 'user-almoxarife-1',
+    name: 'Lucas Mendes (Almoxarife)',
+    email: 'lucas.almoxarife@almoxplus.com.br',
+    password: 'senha123',
+    role: 'Almoxarife',
+    branch: 'SP',
+    active: true,
+    firstAccess: false,
+    createdAt: '2025-02-08T08:30:00Z',
+    department: 'Operações de Almoxarifado & Doca',
+    phone: '(11) 97722-1100'
+  },
+  {
+    id: 'user-comprador-1',
+    name: 'Mariana Duarte (Compradora)',
+    email: 'mariana.compras@almoxplus.com.br',
+    password: 'senha123',
+    role: 'Comprador',
+    branch: 'SP',
+    active: true,
+    firstAccess: false,
+    createdAt: '2025-02-09T09:00:00Z',
+    department: 'Suprimentos, Cotações & Compras',
+    phone: '(11) 98833-2211'
+  },
+  {
+    id: 'user-gestor-1',
+    name: 'Roberto Valença (Gestor)',
+    email: 'roberto.gestor@almoxplus.com.br',
+    password: 'senha123',
+    role: 'Gestor',
+    branch: 'SP',
+    active: true,
+    firstAccess: false,
+    createdAt: '2025-02-10T10:00:00Z',
+    department: 'Diretoria & Controladoria',
+    phone: '(11) 99944-3322'
+  },
+  {
     id: 'user-visitor-1',
     name: 'Patricia Nogueira (Auditoria)',
     email: 'patricia.auditoria@almoxplus.com.br',

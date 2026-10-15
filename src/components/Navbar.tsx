@@ -295,25 +295,50 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar, onNavigateToTab
         slotProps={{
           paper: {
             elevation: 4,
-            className: "w-56 rounded-2xl border border-slate-200 dark:border-slate-800 dark:bg-slate-900 p-1"
+            className: "w-64 rounded-2xl border border-slate-200 dark:border-slate-800 dark:bg-slate-900 p-1.5 shadow-xl"
           }
         }}
       >
         <Box className="p-2 border-b border-slate-100 dark:border-slate-800 mb-1">
-          <Typography variant="caption" className="font-bold text-slate-400 text-[10px] uppercase tracking-wider block">
-            Selecione Perfil para Teste
+          <Typography variant="caption" className="font-extrabold text-slate-500 dark:text-slate-400 text-[10px] uppercase tracking-wider block">
+            Simulação de Perfis de Acesso
           </Typography>
         </Box>
-        <MenuItem onClick={() => handleQuickRoleChange('Master', 'SP')} className="text-xs py-2 rounded-lg">
-          👑 Master (Acesso Total)
+
+        <MenuItem onClick={() => handleQuickRoleChange('Master', 'SP')} className="text-xs py-2 rounded-lg font-medium">
+          👑 <span className="ml-1.5 font-bold">Master</span> <span className="ml-auto text-[10px] text-slate-400">(Acesso Total)</span>
         </MenuItem>
+
+        <MenuItem onClick={() => handleQuickRoleChange('Almoxarife', 'SP')} className="text-xs py-2 rounded-lg font-medium">
+          📦 <span className="ml-1.5 font-bold">Almoxarife</span> <span className="ml-auto text-[10px] text-slate-400">(Estoque & Doca)</span>
+        </MenuItem>
+
+        <MenuItem onClick={() => handleQuickRoleChange('Comprador', 'SP')} className="text-xs py-2 rounded-lg font-medium">
+          🛒 <span className="ml-1.5 font-bold">Comprador</span> <span className="ml-auto text-[10px] text-slate-400">(Compras & OCs)</span>
+        </MenuItem>
+
+        <MenuItem onClick={() => handleQuickRoleChange('Gestor', 'SP')} className="text-xs py-2 rounded-lg font-medium">
+          📊 <span className="ml-1.5 font-bold">Gestor</span> <span className="ml-auto text-[10px] text-slate-400">(Diretoria & BI)</span>
+        </MenuItem>
+
+        <Divider className="my-1.5" />
+
+        <Box className="px-2 py-1">
+          <Typography variant="caption" className="font-bold text-slate-400 text-[10px] uppercase tracking-wider block">
+            Operação Regional por Unidade
+          </Typography>
+        </Box>
+
         {activeBranches.map(b => (
-          <MenuItem key={b.id} onClick={() => handleQuickRoleChange('Regular', b.code)} className="text-xs py-2 rounded-lg">
-            🏢 Regular - Unidade {b.code} ({b.city})
+          <MenuItem key={b.id} onClick={() => handleQuickRoleChange('Regular', b.code)} className="text-xs py-1.5 rounded-lg">
+            🏢 Regular — Unidade {b.code} ({b.city})
           </MenuItem>
         ))}
-        <MenuItem onClick={() => handleQuickRoleChange('Visitante', 'SP')} className="text-xs py-2 rounded-lg">
-          👁️ Visitante (Apenas Leitura)
+
+        <Divider className="my-1.5" />
+
+        <MenuItem onClick={() => handleQuickRoleChange('Visitante', 'SP')} className="text-xs py-2 rounded-lg text-slate-600 dark:text-slate-300 font-medium">
+          👁️ <span className="ml-1.5 font-bold">Visitante</span> <span className="ml-auto text-[10px] text-slate-400">(Somente Leitura)</span>
         </MenuItem>
       </Menu>
 

@@ -15,6 +15,7 @@ import { dataService } from '../services/dataService';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { Breadcrumb } from '../components/Breadcrumb';
+import { CustomKpiBuilder } from '../components/CustomKpiBuilder';
 import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 import { Branch, Product } from '../types';
 
@@ -26,6 +27,7 @@ export const Indicadores: React.FC = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [targetBranch, setTargetBranch] = useState<Branch | 'GLOBAL'>(selectedBranch);
   const [selectedCategory, setSelectedCategory] = useState<string>('TODAS');
+  const [periodFilter, setPeriodFilter] = useState<string>('ALL');
   const [stagnantDays, setStagnantDays] = useState<number>(60);
   const [stagnantSearch, setStagnantSearch] = useState<string>('');
   const [scheduleFreq, setScheduleFreq] = useState<string>('SEMANAL');
@@ -211,8 +213,8 @@ export const Indicadores: React.FC = () => {
       'Relatório Executivo de Produtos Estagnados (Estoque Parado)',
       headers,
       rows,
-      `Relatorio_Produtos_Estagnados_${targetBranch}_${stagnantDays}dias`,
-      `Unidade: ${targetBranch} | Período de Inatividade: Acima de ${stagnantDays} dias | Total Capital Parado: R$ ${stagnantSummary.totalCapital.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+      `Relatorio_Produtos_Estagnados_${targetBranch}_${selectedCategory}_${stagnantDays}dias`,
+      `Unidade: ${targetBranch} | Categoria: ${selectedCategory} | Período: ${periodFilter} (Acima de ${stagnantDays} dias) | Total Capital Parado: R$ ${stagnantSummary.totalCapital.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
     );
   };
 
@@ -226,6 +228,7 @@ export const Indicadores: React.FC = () => {
       'Produto': item.product.name,
       'Categoria': item.product.category,
       'Unidade Operacional': targetBranch,
+      'Período Apurado': periodFilter,
       'Qtd em Estoque': item.totalQty,
       'Unid. Medida': item.product.unit,
       'Preço Unitário (R$)': item.product.unitPrice,
@@ -236,7 +239,7 @@ export const Indicadores: React.FC = () => {
       'Ação Recomendada': item.diffDays >= 180 ? 'Desmobilização Imediata / Liquidação' : 'Remanejamento / Transferência entre Unidades'
     }));
 
-    exportToExcel(data, `Relatorio_Produtos_Estagnados_${targetBranch}_${stagnantDays}dias`);
+    exportToExcel(data, `Relatorio_Produtos_Estagnados_${targetBranch}_${selectedCategory}_${stagnantDays}dias`);
   };
 
   // EXPORT HANDLER: CURVA ABC
@@ -249,13 +252,15 @@ export const Indicadores: React.FC = () => {
         'SKU': item.product.code,
         'Produto': item.product.name,
         'Categoria': item.product.category,
+        'Unidade': targetBranch,
+        'Período': periodFilter,
         'Quantidade': item.qty,
         'Preço Unitário (R$)': item.product.unitPrice,
         'Valor Total (R$)': item.totalVal,
         'Classe ABC': `Classe ${cls}`
       };
     });
-    exportToExcel(data, `Curva_ABC_Pareto_${targetBranch}`);
+    exportToExcel(data, `Curva_ABC_Pareto_${targetBranch}_${selectedCategory}`);
   };
 
   const handleExportAbcPDF = () => {
@@ -278,8 +283,8 @@ export const Indicadores: React.FC = () => {
       'Relatório Curva ABC - Análise Pareto de Estoque',
       headers,
       rows,
-      `Curva_ABC_${targetBranch}`,
-      `Unidade: ${targetBranch} | Capital Total: R$ ${abcAnalysis.grandTotalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+      `Curva_ABC_${targetBranch}_${selectedCategory}`,
+      `Unidade: ${targetBranch} | Categoria: ${selectedCategory} | Período: ${periodFilter} | Capital Total: R$ ${abcAnalysis.grandTotalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
     );
   };
 
@@ -354,18 +359,55 @@ export const Indicadores: React.FC = () => {
               </FormControl>
             </div>
 
-            {/* Quick Action to Stagnant Report Tab */}
+            <div className="flex flex-col">
+              <span className="text-black dark:text-slate-200 font-extrabold text-xs mb-1">
+                Período
+              </span>
+              <FormControl size="small" className="min-w-[160px] bg-slate-900 dark:bg-slate-950 rounded-xl border border-slate-800 shadow-xs">
+                <Select
+                  value={periodFilter}
+                  onChange={(e) => setPeriodFilter(e.target.value)}
+                  className="!text-white text-xs font-bold"
+                  sx={{
+                    color: 'white',
+                    '.MuiSvgIcon-root': { color: 'white' },
+                    '& .MuiSelect-select': { color: 'white', fontWeight: 'bold', py: '7px' },
+                    '& .MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' }
+                  }}
+                >
+                  <MenuItem value="ALL">Todo o Período</MenuItem>
+                  <MenuItem value="HOJE">Hoje</MenuItem>
+                  <MenuItem value="ULTIMOS_7_DIAS">Últimos 7 Dias</MenuItem>
+                  <MenuItem value="ULTIMOS_30_DIAS">Últimos 30 Dias</MenuItem>
+                  <MenuItem value="MES_ATUAL">Mês Atual</MenuItem>
+                  <MenuItem value="TRIMESTRE">Últimos 90 Dias</MenuItem>
+                </Select>
+              </FormControl>
+            </div>
+
+            {/* Quick Action to Stagnant Report Tab & Custom KPI Builder */}
             <div className="flex flex-col">
               <span className="opacity-0 text-xs mb-1 select-none pointer-events-none">.</span>
-              <Button
-                variant="contained"
-                onClick={() => setActiveTab(3)}
-                startIcon={<Clock className="w-4 h-4 text-white" />}
-                className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-950 dark:hover:bg-slate-800 !text-white font-bold text-xs py-2 px-3.5 rounded-xl shadow-xs border border-slate-800 h-[36px]"
-                sx={{ color: '#ffffff !important' }}
-              >
-                Produtos Estagnados ({stagnantSummary.totalItems})
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="contained"
+                  onClick={() => setActiveTab(6)}
+                  startIcon={<Sparkles className="w-4 h-4 text-amber-400" />}
+                  className="bg-blue-700 hover:bg-blue-800 !text-white font-bold text-xs py-2 px-3.5 rounded-xl shadow-xs border border-blue-600 h-[36px]"
+                  sx={{ color: '#ffffff !important' }}
+                >
+                  Criar Meu KPI
+                </Button>
+                <Button
+                  variant="contained"
+                  onClick={() => setActiveTab(3)}
+                  startIcon={<Clock className="w-4 h-4 text-white" />}
+                  className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-950 dark:hover:bg-slate-800 !text-white font-bold text-xs py-2 px-3.5 rounded-xl shadow-xs border border-slate-800 h-[36px]"
+                  sx={{ color: '#ffffff !important' }}
+                >
+                  Produtos Estagnados ({stagnantSummary.totalItems})
+                </Button>
+              </div>
             </div>
           </div>
         </Box>
@@ -392,6 +434,12 @@ export const Indicadores: React.FC = () => {
           />
           <Tab icon={<AlertTriangle className="w-4 h-4 text-rose-600" />} iconPosition="start" label="5. Validade & Alertas" className="font-bold text-xs" />
           <Tab icon={<Mail className="w-4 h-4 text-indigo-600" />} iconPosition="start" label="6. Agendamento & Exportação" className="font-bold text-xs" />
+          <Tab
+            icon={<Sparkles className="w-4 h-4 text-amber-500" />}
+            iconPosition="start"
+            label="7. Construtor de KPIs (Personalizado)"
+            className="font-extrabold text-xs text-blue-700 dark:text-blue-400"
+          />
         </Tabs>
       </Box>
 
@@ -668,7 +716,13 @@ export const Indicadores: React.FC = () => {
                   `R$ ${b.savings.toFixed(2)}`,
                   `${b.avgLeadDays} dias`
                 ]);
-                exportToPDF('Relatório de Desempenho do Time de Compras', headers, rows, 'Desempenho_Compradores');
+                exportToPDF(
+                  'Relatório de Desempenho do Time de Compras',
+                  headers,
+                  rows,
+                  `Desempenho_Compradores_${targetBranch}`,
+                  `Unidade: ${targetBranch} | Categoria: ${selectedCategory} | Período: ${periodFilter}`
+                );
               }}
               startIcon={<FileText className="w-4 h-4 text-white" />}
               className="bg-indigo-600 hover:bg-indigo-700 !text-white font-bold text-xs py-1.5 px-3 rounded-xl shadow-xs"
@@ -981,7 +1035,13 @@ export const Indicadores: React.FC = () => {
                   const status = days < 0 ? 'VENCIDO' : days <= 15 ? 'VENCE EM BREVE' : 'REGULAR';
                   return [p.code, p.name, p.category, p.locationSlot, exp.toLocaleDateString('pt-BR'), status];
                 });
-                exportToPDF('Relatório de Validades e Vencimentos de Materiais', headers, rows, 'Relatorio_Validades');
+                exportToPDF(
+                  'Relatório de Validades e Vencimentos de Materiais',
+                  headers,
+                  rows,
+                  `Relatorio_Validades_${targetBranch}`,
+                  `Unidade: ${targetBranch} | Categoria: ${selectedCategory} | Período: ${periodFilter}`
+                );
               }}
               startIcon={<FileText className="w-4 h-4 text-white" />}
               className="bg-amber-600 hover:bg-amber-700 !text-white font-bold text-xs py-1.5 px-3 rounded-xl shadow-xs"
@@ -1062,6 +1122,17 @@ export const Indicadores: React.FC = () => {
             </Button>
           </form>
         </Card>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 7: CONSTRUTOR DE KPIs PERSONALIZADOS (SELF-SERVICE BI) */}
+      {/* ========================================================================= */}
+      {activeTab === 6 && (
+        <CustomKpiBuilder
+          globalBranch={targetBranch}
+          globalCategory={selectedCategory}
+          globalPeriod={periodFilter}
+        />
       )}
 
       {/* ========================================================================= */}

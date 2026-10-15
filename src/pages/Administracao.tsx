@@ -1,11 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Box, Typography, Card, Button, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Select, FormControl,
   InputLabel, Alert, Chip, Tabs, Tab, IconButton, Tooltip, Snackbar,
-  FormControlLabel, Checkbox, InputAdornment
+  FormControlLabel, Checkbox, InputAdornment, Switch, Table, TableHead,
+  TableRow, TableCell, TableBody
 } from '@mui/material';
-import { Download, Upload, UserPlus, Edit3, Trash2, Eye, EyeOff, KeyRound, Lock, ShieldCheck, Building2, MapPin, Plus } from 'lucide-react';
+import {
+  Download, Upload, Edit3, Trash2, Eye, EyeOff, KeyRound, Lock, ShieldCheck,
+  Database, Clock, Play, RotateCcw, CheckCircle2, FileSpreadsheet,
+  HardDrive, ShieldAlert, Sparkles, CalendarClock, PackageCheck, ShoppingCart,
+  FileJson, RefreshCw, Info
+} from 'lucide-react';
 
 import { dataService } from '../services/dataService';
 import { useAuth } from '../context/AuthContext';
@@ -13,7 +19,32 @@ import { useApp } from '../context/AppContext';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { DataTable, Column } from '../components/DataTable';
 import { Unidades } from './Unidades';
-import { User, AuditLog, UserRole, Branch } from '../types';
+import { exportToExcel } from '../utils/exportUtils';
+import {
+  User, AuditLog, UserRole, Branch, BackupScope, BackupFrequency,
+  BackupRoutineConfig, BackupSnapshot
+} from '../types';
+
+const SCOPE_LABELS: Record<BackupScope, string> = {
+  INVENTARIO_E_COMPRAS: 'Inventário & Compras (Proteção Crítica)',
+  COMPLETO: 'Banco de Dados Completo (ERP Integral)',
+  APENAS_INVENTARIO: 'Apenas Inventário & Almoxarifado',
+  APENAS_COMPRAS: 'Apenas Compras (SCs, OCs e Centros de Custo)'
+};
+
+const FREQUENCY_LABELS: Record<BackupFrequency, string> = {
+  DIARIO: 'Diário (Horário Fixo)',
+  A_CADA_6_HORAS: 'Alta Disponibilidade (A cada 6 Horas)',
+  SEMANAL: 'Semanal (Ciclo de 7 Dias)',
+  GATILHO_CRITICO: 'Tempo Real por Gatilho Operacional'
+};
+
+const TRIGGER_LABELS: Record<BackupSnapshot['triggerType'], { label: string; color: 'primary' | 'success' | 'warning' | 'info' }> = {
+  AUTOMATICO_AGENDADO: { label: 'Rotina Agendada (CRON)', color: 'primary' },
+  MANUAL_SOB_DEMANDA: { label: 'Manual Sob Demanda', color: 'success' },
+  GATILHO_OPERACIONAL: { label: 'Gatilho Operacional (Auto)', color: 'info' },
+  PRE_RESTAURACAO: { label: 'Segurança Pré-Restauração', color: 'warning' }
+};
 
 export const Administracao: React.FC = () => {
   const { currentUser } = useAuth();
@@ -31,11 +62,31 @@ export const Administracao: React.FC = () => {
 
   const [formError, setFormError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [toastSeverity, setToastSeverity] = useState<'success' | 'info' | 'error'>('success');
+  const [toastSeverity, setToastSeverity] = useState<'success' | 'info' | 'error' | 'warning'>('success');
+
+  // --- ESTADOS DA ROTINA DE BACKUP ---
+  const initialBackupConfig = dataService.getBackupConfig();
+  const [backupConfigForm, setBackupConfigForm] = useState<BackupRoutineConfig>(initialBackupConfig);
+  const [manualBackupScope, setManualBackupScope] = useState<BackupScope>('INVENTARIO_E_COMPRAS');
+  const [manualBackupNotes, setManualBackupNotes] = useState('');
+  const [restoreScopeFile, setRestoreScopeFile] = useState<BackupScope>('COMPLETO');
+  const [safetyBackupOnFileImport, setSafetyBackupOnFileImport] = useState(true);
+
+  // Modal de Inspeção e Restauração de Snapshot
+  const [inspectSnapshot, setInspectSnapshot] = useState<BackupSnapshot | null>(null);
+  const [restoreTargetSnapshot, setRestoreTargetSnapshot] = useState<BackupSnapshot | null>(null);
+  const [restoreSnapshotScope, setRestoreSnapshotScope] = useState<BackupScope>('INVENTARIO_E_COMPRAS');
+  const [createPreRestoreBackup, setCreatePreRestoreBackup] = useState(true);
+
+  // Relatório de Verificação de Integridade
+  const [integrityReport, setIntegrityReport] = useState<ReturnType<typeof dataService.verifyDataIntegrity> | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   const state = dataService.getState();
   const users = state.users;
   const auditLogs = state.auditLogs;
+  const snapshots = useMemo(() => dataService.getBackupSnapshots(), [state, refreshTick]);
+  const liveMetrics = useMemo(() => dataService.calculateBackupMetrics(state), [state, refreshTick]);
 
   const handleDeleteUser = (user: User) => {
     if (!currentUser) return;
@@ -122,7 +173,7 @@ export const Administracao: React.FC = () => {
     { id: 'operation', label: 'Operação', accessor: (l) => l.operation, render: (l) => (
       <Chip label={l.operation} size="small" className="font-bold text-[9px] bg-slate-200 dark:bg-slate-700 h-4" />
     )},
-    { id: 'entity', label: 'Entidade Afetada', accessor: (l) => l.entity },
+    { id: 'entity', label: 'Entidade Afetada', accessor: (l) => l.entity || l.module || 'Sistema' },
     { id: 'details', label: 'Detalhamento do Evento', accessor: (l) => l.details },
     { id: 'branch', label: 'Unidade', accessor: (l) => l.branch }
   ];
@@ -186,16 +237,127 @@ export const Administracao: React.FC = () => {
     }
   };
 
-  const handleExportBackup = () => {
-    const jsonStr = dataService.exportDatabaseJSON();
+  // --- HANDLERS DA ROTINA DE BACKUP ---
+  const handleSaveBackupRoutineConfig = () => {
+    if (!currentUser) return;
+    try {
+      const updated = dataService.updateBackupConfig(backupConfigForm, currentUser);
+      setBackupConfigForm({ ...updated });
+      setRefreshTick(t => t + 1);
+      refreshData();
+      setToastSeverity('success');
+      setToastMessage(
+        `Rotina de backup atualizada com sucesso! Próxima execução agendada para ${new Date(updated.nextScheduledAt || '').toLocaleString('pt-BR')}.`
+      );
+    } catch (err: any) {
+      setToastSeverity('error');
+      setToastMessage(err.message);
+    }
+  };
+
+  const handleRunBackupNow = () => {
+    if (!currentUser) return;
+    try {
+      const snap = dataService.createBackupSnapshot(
+        manualBackupScope,
+        'MANUAL_SOB_DEMANDA',
+        currentUser,
+        manualBackupNotes
+      );
+      setManualBackupNotes('');
+      setBackupConfigForm({ ...dataService.getBackupConfig() });
+      setRefreshTick(t => t + 1);
+      refreshData();
+      setToastSeverity('success');
+      setToastMessage(
+        `Ponto de restauração ${snap.code} criado com sucesso! (${snap.metrics.productsCount} produtos, ${snap.metrics.inventoriesCount} inventários e ${snap.metrics.purchaseOrdersCount} OCs protegidos).`
+      );
+    } catch (err: any) {
+      setToastSeverity('error');
+      setToastMessage(err.message);
+    }
+  };
+
+  const handleExportBackupJSON = (scope: BackupScope = manualBackupScope, snapshot?: BackupSnapshot) => {
+    const jsonStr = snapshot
+      ? JSON.stringify(
+          {
+            metadata: {
+              system: 'Almox Plus ERP Enterprise',
+              snapshotCode: snapshot.code,
+              createdAt: snapshot.createdAt,
+              createdBy: snapshot.createdBy,
+              scope: snapshot.scope,
+              checksum: snapshot.checksum,
+              metrics: snapshot.metrics
+            },
+            data: snapshot.payload
+          },
+          null,
+          2
+        )
+      : dataService.exportDatabaseJSON(scope);
+
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `AlmoxPlus_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+    const suffix = snapshot ? snapshot.code : `${scope}_${new Date().toISOString().slice(0, 10)}`;
+    a.download = `AlmoxPlus_Backup_${suffix}.json`;
     a.click();
     setToastSeverity('info');
-    setToastMessage('Download do arquivo de backup JSON concluído.');
+    setToastMessage(`Download do arquivo de backup (${suffix}.json) concluído.`);
+  };
+
+  const handleExportSecurityExcel = () => {
+    const branches = dataService.getBranches();
+    const inventoryRows = state.products.map(p => {
+      const totalStock = Object.values(p.stockByBranch || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+      const branchBreakdown = branches.map(b => `${b.code}: ${p.stockByBranch?.[b.code] || 0}`).join(' | ');
+      return {
+        Modulo: 'INVENTÁRIO & ESTOQUE',
+        Codigo_Registro: p.code,
+        Descricao_Item: p.name,
+        Categoria: p.category,
+        Unidades_Saldos: branchBreakdown,
+        Quantidade_Total: `${totalStock} ${p.unit}`,
+        Valor_Unitario: `R$ ${(p.unitPrice || 0).toFixed(2)}`,
+        Valor_Total_Protegido: `R$ ${(totalStock * (p.unitPrice || 0)).toFixed(2)}`,
+        Status: p.active ? 'ATIVO' : 'INATIVO',
+        Data_Referencia: p.updatedAt ? new Date(p.updatedAt).toLocaleDateString('pt-BR') : new Date(p.createdAt).toLocaleDateString('pt-BR')
+      };
+    });
+
+    const purchaseRows = state.purchaseOrders.map(po => ({
+      Modulo: 'COMPRAS (ORDEM DE COMPRA)',
+      Codigo_Registro: po.code,
+      Descricao_Item: `Fornecedor: ${po.supplierName} (${po.items.map(i => `${i.productName} x${i.quantity}`).join(', ')})`,
+      Categoria: po.costCenterName || 'Suprimentos Gerais',
+      Unidades_Saldos: `Unidade ${po.branch}`,
+      Quantidade_Total: `${po.items.reduce((s, i) => s + i.quantity, 0)} itens`,
+      Valor_Unitario: '-',
+      Valor_Total_Protegido: `R$ ${(po.totalValue || 0).toFixed(2)}`,
+      Status: po.status,
+      Data_Referencia: new Date(po.createdAt).toLocaleDateString('pt-BR')
+    }));
+
+    const scRows = (state.purchaseRequests || []).map(sc => ({
+      Modulo: 'COMPRAS (SOLICITAÇÃO SC)',
+      Codigo_Registro: sc.code,
+      Descricao_Item: `Solicitante: ${sc.requestedBy} - ${sc.justification}`,
+      Categoria: sc.costCenterName || sc.department || 'Geral',
+      Unidades_Saldos: `Unidade ${sc.branch}`,
+      Quantidade_Total: `${sc.items.length} itens solicitados`,
+      Valor_Unitario: '-',
+      Valor_Total_Protegido: `R$ ${sc.items.reduce((s, i) => s + (i.quantity * (i.estimatedUnitPrice || 0)), 0).toFixed(2)}`,
+      Status: sc.status,
+      Data_Referencia: new Date(sc.createdAt).toLocaleDateString('pt-BR')
+    }));
+
+    const combined = [...inventoryRows, ...purchaseRows, ...scRows];
+    exportToExcel(combined, `Espelho_Seguranca_Inventario_Compras_${new Date().toISOString().slice(0, 10)}`);
+    setToastSeverity('success');
+    setToastMessage('Planilha consolidada de segurança (Inventário & Compras) exportada em Excel (.xlsx)!');
   };
 
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -206,16 +368,72 @@ export const Administracao: React.FC = () => {
     reader.onload = (evt) => {
       try {
         const content = evt.target?.result as string;
-        dataService.importDatabaseJSON(content, currentUser);
+        dataService.importDatabaseJSON(content, currentUser, restoreScopeFile, safetyBackupOnFileImport);
+        setRefreshTick(t => t + 1);
         refreshData();
         setToastSeverity('success');
-        setToastMessage('Backup do sistema restaurado com sucesso!');
+        setToastMessage(`Backup restaurado com sucesso (Escopo aplicado: ${SCOPE_LABELS[restoreScopeFile]})!`);
       } catch (err: any) {
         setToastSeverity('error');
         setToastMessage(`Erro ao restaurar backup: ${err.message}`);
       }
     };
     reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleConfirmSnapshotRestore = () => {
+    if (!restoreTargetSnapshot || !currentUser) return;
+    try {
+      dataService.restoreFromSnapshot(
+        restoreTargetSnapshot.id,
+        restoreSnapshotScope,
+        createPreRestoreBackup,
+        currentUser
+      );
+      setRestoreTargetSnapshot(null);
+      setRefreshTick(t => t + 1);
+      refreshData();
+      setToastSeverity('success');
+      setToastMessage(
+        `Dados restaurados com sucesso para o ponto ${restoreTargetSnapshot.code} (${SCOPE_LABELS[restoreSnapshotScope]})!`
+      );
+    } catch (err: any) {
+      setToastSeverity('error');
+      setToastMessage(err.message);
+    }
+  };
+
+  const handleDeleteSnapshot = (snap: BackupSnapshot) => {
+    if (!currentUser) return;
+    if (confirm(`Deseja remover o ponto de restauração ${snap.code} do cofre de backups?`)) {
+      try {
+        dataService.deleteBackupSnapshot(snap.id, currentUser);
+        setRefreshTick(t => t + 1);
+        refreshData();
+        setToastSeverity('info');
+        setToastMessage(`Ponto de restauração ${snap.code} removido do cofre.`);
+      } catch (err: any) {
+        setToastSeverity('error');
+        setToastMessage(err.message);
+      }
+    }
+  };
+
+  const handleVerifyIntegrity = () => {
+    const result = dataService.verifyDataIntegrity();
+    setIntegrityReport(result);
+    setToastSeverity(result.valid ? 'success' : 'warning');
+    setToastMessage(
+      result.valid
+        ? `Verificação concluída: 100% dos ${result.totalRecordsChecked} registros de Inventário e Compras estão íntegros (${result.checksum.slice(0, 15)}...).`
+        : 'Atenção: Foram detectadas inconsistências durante a auditoria de integridade.'
+    );
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
   return (
@@ -223,11 +441,18 @@ export const Administracao: React.FC = () => {
       <Breadcrumb items={[{ label: 'Administração do Sistema' }]} />
 
       <Box className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl p-2 shadow-xs">
-        <Tabs value={currentTab} onChange={(_, val) => setCurrentTab(val)} indicatorColor="primary" textColor="primary">
+        <Tabs
+          value={currentTab}
+          onChange={(_, val) => setCurrentTab(val)}
+          indicatorColor="primary"
+          textColor="primary"
+          variant="scrollable"
+          scrollButtons="auto"
+        >
           <Tab label="Gestão de Usuários e Perfis" className="font-bold text-xs" />
           <Tab label="Cadastro & Expansão de Unidades" className="font-bold text-xs" />
           <Tab label="Logs Auditáveis de Operação" className="font-bold text-xs" />
-          <Tab label="Backup & Restauração de Dados" className="font-bold text-xs" />
+          <Tab label="Rotina de Backup & Recuperação (Inventário e Compras)" className="font-bold text-xs" />
           <Tab label="Monitoramento, LGPD & APIs" className="font-bold text-xs" />
         </Tabs>
       </Box>
@@ -275,54 +500,620 @@ export const Administracao: React.FC = () => {
       )}
 
       {currentTab === 3 && (
-        <Card className="rounded-xl border-slate-200 dark:border-slate-800 p-6 space-y-6">
-          <div>
-            <Typography variant="h6" className="font-bold text-slate-900 dark:text-slate-100 text-base">
-              Backup e Recuperação de Desastres (DR)
-            </Typography>
-            <Typography variant="body2" className="text-slate-500 text-xs mt-1">
-              Faça download de uma cópia de segurança completa do banco de dados em formato JSON ou restaure um backup prévio.
-            </Typography>
+        <div className="space-y-6">
+          {/* HEADER E KPIs DE PROTEÇÃO DE INVENTÁRIO E COMPRAS */}
+          <Card className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs space-y-5">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Database className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                  <Typography variant="h6" className="font-extrabold text-slate-900 dark:text-white text-base sm:text-lg">
+                    Central de Rotina de Backup & Segurança de Dados (Inventário e Compras)
+                  </Typography>
+                  <Chip
+                    label={backupConfigForm.enabled ? 'ROTINA AUTOMÁTICA ATIVA' : 'ROTINA PAUSADA'}
+                    color={backupConfigForm.enabled ? 'success' : 'warning'}
+                    size="small"
+                    className="font-extrabold text-[10px]"
+                  />
+                </div>
+                <Typography variant="body2" className="text-slate-600 dark:text-slate-300 text-xs sm:text-sm">
+                  Garante a proteção contínua, integridade SHA-256 e recuperação imediata (*Point-in-Time Recovery*) dos saldos de estoque, movimentações, auditorias de inventário físico, solicitações e ordens de compra.
+                </Typography>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <Button
+                  variant="outlined"
+                  onClick={handleVerifyIntegrity}
+                  startIcon={<ShieldCheck className="w-4 h-4 text-emerald-600" />}
+                  className="font-bold text-xs py-2 px-3 rounded-xl border-emerald-300 text-slate-800 dark:text-slate-100 hover:bg-emerald-50"
+                >
+                  Verificar Integridade (SHA-256)
+                </Button>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleRunBackupNow}
+                  startIcon={<Play className="w-4 h-4 text-white" />}
+                  sx={{ color: '#ffffff !important' }}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs py-2.5 px-4 rounded-xl shadow-sm"
+                >
+                  Executar Backup Agora
+                </Button>
+              </div>
+            </div>
+
+            {/* 4 CARDS EXECUTIVOS DE MONITORAMENTO DO BACKUP */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <Box className="p-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/50 dark:bg-blue-950/20 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                    Agendamento da Rotina
+                  </span>
+                  <CalendarClock className="w-4 h-4 text-blue-600" />
+                </div>
+                <Typography variant="subtitle1" className="font-black text-slate-900 dark:text-white text-sm">
+                  {FREQUENCY_LABELS[backupConfigForm.frequency]}
+                </Typography>
+                <Typography variant="caption" className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                  Último: <strong>{backupConfigForm.lastRunAt ? new Date(backupConfigForm.lastRunAt).toLocaleString('pt-BR') : 'Hoje'}</strong>
+                </Typography>
+                <Typography variant="caption" className="text-blue-700 dark:text-blue-300 font-bold block text-[11px]">
+                  Próximo: {backupConfigForm.nextScheduledAt ? new Date(backupConfigForm.nextScheduledAt).toLocaleString('pt-BR') : `Hoje às ${backupConfigForm.scheduledTime}`}
+                </Typography>
+              </Box>
+
+              <Box className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/50 dark:bg-emerald-950/20 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                    Dados de Inventário Protegidos
+                  </span>
+                  <PackageCheck className="w-4 h-4 text-emerald-600" />
+                </div>
+                <Typography variant="subtitle1" className="font-black text-slate-900 dark:text-white text-sm">
+                  R$ {liveMetrics.totalInventoryValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </Typography>
+                <Typography variant="caption" className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                  <strong>{liveMetrics.productsCount}</strong> SKUs | <strong>{liveMetrics.inventoriesCount}</strong> Auditorias Físicas
+                </Typography>
+                <Typography variant="caption" className="text-emerald-700 dark:text-emerald-300 font-bold block text-[11px]">
+                  {liveMetrics.movementsCount} Movimentações & {liveMetrics.transfersCount} Transferências
+                </Typography>
+              </Box>
+
+              <Box className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                    Dados de Compras Protegidos
+                  </span>
+                  <ShoppingCart className="w-4 h-4 text-indigo-600" />
+                </div>
+                <Typography variant="subtitle1" className="font-black text-slate-900 dark:text-white text-sm">
+                  R$ {liveMetrics.totalPurchasesValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </Typography>
+                <Typography variant="caption" className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                  <strong>{liveMetrics.purchaseRequestsCount}</strong> Solicitações (SC) | <strong>{liveMetrics.purchaseOrdersCount}</strong> Ordens (OC)
+                </Typography>
+                <Typography variant="caption" className="text-indigo-700 dark:text-indigo-300 font-bold block text-[11px]">
+                  {liveMetrics.costCentersCount} Centros de Custo Conciliados
+                </Typography>
+              </Box>
+
+              <Box className="p-4 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                    Cofre de Restauração (DR)
+                  </span>
+                  <HardDrive className="w-4 h-4 text-amber-600" />
+                </div>
+                <Typography variant="subtitle1" className="font-black text-slate-900 dark:text-white text-sm">
+                  {snapshots.length} / {backupConfigForm.retentionLimit} Snapshots
+                </Typography>
+                <Typography variant="caption" className="text-slate-600 dark:text-slate-400 block text-[11px]">
+                  Último código: <strong>{snapshots[0]?.code || 'N/A'}</strong>
+                </Typography>
+                <Typography variant="caption" className="text-amber-800 dark:text-amber-300 font-bold block text-[11px]">
+                  ✓ Checksum SHA-256 Verificado
+                </Typography>
+              </Box>
+            </div>
+
+            {/* PAINEL DE RESULTADO DA VERIFICAÇÃO DE INTEGRIDADE (QUANDO ACIONADO) */}
+            {integrityReport && (
+              <Box className="p-4 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    <Typography variant="subtitle2" className="font-extrabold text-slate-900 dark:text-white">
+                      Laudo de Diagnóstico de Integridade — Inventário & Compras ({new Date(integrityReport.checkedAt).toLocaleTimeString('pt-BR')})
+                    </Typography>
+                    <Chip
+                      label={integrityReport.valid ? '100% ÍNTEGRO' : 'ATENÇÃO'}
+                      color={integrityReport.valid ? 'success' : 'warning'}
+                      size="small"
+                      className="font-bold text-[10px] h-5"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[11px] bg-white dark:bg-slate-900 px-2.5 py-1 rounded border border-emerald-200 text-slate-700 dark:text-slate-300">
+                      {integrityReport.checksum}
+                    </span>
+                    <Button size="small" onClick={() => setIntegrityReport(null)} className="text-xs font-bold">
+                      Fechar Laudo
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5">
+                    <Typography variant="caption" className="font-extrabold uppercase text-emerald-700 dark:text-emerald-400 block">
+                      ✓ Auditoria de Estrutura de Inventário & Almoxarifado
+                    </Typography>
+                    {integrityReport.inventoryChecks.map((chk, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold text-slate-800 dark:text-slate-100">{chk.label}: </span>
+                          <span className="text-slate-600 dark:text-slate-400">{chk.detail}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5">
+                    <Typography variant="caption" className="font-extrabold uppercase text-indigo-700 dark:text-indigo-400 block">
+                      ✓ Auditoria de Estrutura de Compras & Orçamento
+                    </Typography>
+                    {integrityReport.purchaseChecks.map((chk, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold text-slate-800 dark:text-slate-100">{chk.label}: </span>
+                          <span className="text-slate-600 dark:text-slate-400">{chk.detail}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Box>
+            )}
+          </Card>
+
+          {/* GRID PRINCIPAL: 1. PARAMETRIZAÇÃO DA ROTINA AUTOMÁTICA | 2. EXECUÇÃO SOB DEMANDA & EXPORTAÇÃO */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* COLUNA ESQUERDA (7 COLUNAS): CONFIGURAÇÃO DA ROTINA AUTOMÁTICA */}
+            <Card className="lg:col-span-7 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5 shadow-xs">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div>
+                  <Typography variant="subtitle1" className="font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-blue-600" />
+                    1. Parametrização da Rotina Automática de Backup
+                  </Typography>
+                  <Typography variant="caption" className="text-slate-500 dark:text-slate-400 block">
+                    Defina a periodicidade, escopo protegido, política de retenção e gatilhos automáticos de segurança.
+                  </Typography>
+                </div>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={backupConfigForm.enabled}
+                      onChange={(e) => setBackupConfigForm({ ...backupConfigForm, enabled: e.target.checked })}
+                      color="success"
+                    />
+                  }
+                  label={
+                    <span className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
+                      {backupConfigForm.enabled ? 'Rotina Ativa' : 'Pausada'}
+                    </span>
+                  }
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <FormControl fullWidth size="small">
+                  <InputLabel>Frequência da Rotina</InputLabel>
+                  <Select
+                    value={backupConfigForm.frequency}
+                    label="Frequência da Rotina"
+                    onChange={(e) => setBackupConfigForm({ ...backupConfigForm, frequency: e.target.value as BackupFrequency })}
+                  >
+                    <MenuItem value="DIARIO">📅 Diário (Horário Fixo Programado)</MenuItem>
+                    <MenuItem value="A_CADA_6_HORAS">⚡ A cada 6 Horas (Alta Disponibilidade)</MenuItem>
+                    <MenuItem value="SEMANAL">🗓️ Semanal (Ciclo Consolidado)</MenuItem>
+                    <MenuItem value="GATILHO_CRITICO">🛡️ Tempo Real por Gatilho Operacional</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <FormControl fullWidth size="small">
+                  <InputLabel>Horário Programado (Janela)</InputLabel>
+                  <Select
+                    value={backupConfigForm.scheduledTime}
+                    label="Horário Programado (Janela)"
+                    onChange={(e) => setBackupConfigForm({ ...backupConfigForm, scheduledTime: e.target.value })}
+                  >
+                    <MenuItem value="00:00">00:00 (Meia-noite)</MenuItem>
+                    <MenuItem value="02:00">02:00 (Madrugada - Recomendado)</MenuItem>
+                    <MenuItem value="06:00">06:00 (Início de Turno)</MenuItem>
+                    <MenuItem value="12:00">12:00 (Meio-dia)</MenuItem>
+                    <MenuItem value="18:00">18:00 (Fechamento Comercial)</MenuItem>
+                    <MenuItem value="22:00">22:00 (Noturno)</MenuItem>
+                    <MenuItem value="23:59">23:59 (Fechamento Diário)</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <FormControl fullWidth size="small">
+                  <InputLabel>Escopo Padrão da Rotina</InputLabel>
+                  <Select
+                    value={backupConfigForm.defaultScope}
+                    label="Escopo Padrão da Rotina"
+                    onChange={(e) => setBackupConfigForm({ ...backupConfigForm, defaultScope: e.target.value as BackupScope })}
+                  >
+                    <MenuItem value="INVENTARIO_E_COMPRAS">📦🛒 Inventário & Compras (Crítico)</MenuItem>
+                    <MenuItem value="COMPLETO">🏛️ Banco Completo (Todos os Módulos)</MenuItem>
+                    <MenuItem value="APENAS_INVENTARIO">📦 Apenas Inventário, Saldos & Movimentações</MenuItem>
+                    <MenuItem value="APENAS_COMPRAS">🛒 Apenas Compras (SCs, OCs e Centros de Custo)</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <FormControl fullWidth size="small">
+                  <InputLabel>Retenção no Cofre (Snapshots)</InputLabel>
+                  <Select
+                    value={backupConfigForm.retentionLimit}
+                    label="Retenção no Cofre (Snapshots)"
+                    onChange={(e) => setBackupConfigForm({ ...backupConfigForm, retentionLimit: Number(e.target.value) })}
+                  >
+                    <MenuItem value={7}>Manter últimos 7 pontos de restauração</MenuItem>
+                    <MenuItem value={15}>Manter últimos 15 pontos de restauração (Padrão)</MenuItem>
+                    <MenuItem value={30}>Manter últimos 30 pontos de restauração</MenuItem>
+                    <MenuItem value={60}>Manter últimos 60 pontos de restauração</MenuItem>
+                  </Select>
+                </FormControl>
+              </div>
+
+              <Box className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2">
+                <Typography variant="caption" className="font-extrabold uppercase text-slate-700 dark:text-slate-300 block">
+                  Gatilhos Automáticos de Proteção Operacional (Inventário & Compras)
+                </Typography>
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={backupConfigForm.autoBackupOnInventoryReconcile}
+                      onChange={(e) =>
+                        setBackupConfigForm({ ...backupConfigForm, autoBackupOnInventoryReconcile: e.target.checked })
+                      }
+                    />
+                  }
+                  label={
+                    <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                      Gerar backup automático sempre que uma <strong>Auditoria de Inventário Físico</strong> for reconciliada
+                    </span>
+                  }
+                />
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={backupConfigForm.autoBackupOnPurchaseOrderApproval}
+                      onChange={(e) =>
+                        setBackupConfigForm({ ...backupConfigForm, autoBackupOnPurchaseOrderApproval: e.target.checked })
+                      }
+                    />
+                  }
+                  label={
+                    <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                      Gerar backup automático ao aprovar <strong>Solicitações de Compra (SC)</strong> ou receber <strong>Ordens de Compra (OC)</strong>
+                    </span>
+                  }
+                />
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={backupConfigForm.verifyIntegrityOnBackup}
+                      onChange={(e) =>
+                        setBackupConfigForm({ ...backupConfigForm, verifyIntegrityOnBackup: e.target.checked })
+                      }
+                    />
+                  }
+                  label={
+                    <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                      Validar assinatura de integridade <strong>Checksum SHA-256</strong> automaticamente a cada backup
+                    </span>
+                  }
+                />
+              </Box>
+
+              <div className="flex justify-end pt-1">
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleSaveBackupRoutineConfig}
+                  sx={{ color: '#ffffff !important' }}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs py-2.5 px-5 rounded-xl"
+                >
+                  Salvar Configuração da Rotina
+                </Button>
+              </div>
+            </Card>
+
+            {/* COLUNA DIREITA (5 COLUNAS): BACKUP SOB DEMANDA, EXPORTAÇÃO E IMPORTAÇÃO */}
+            <Card className="lg:col-span-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5 shadow-xs flex flex-col justify-between">
+              <div className="space-y-4">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <Typography variant="subtitle1" className="font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Download className="w-5 h-5 text-emerald-600" />
+                    2. Backup Sob Demanda & Exportação Externa
+                  </Typography>
+                  <Typography variant="caption" className="text-slate-500 dark:text-slate-400 block">
+                    Gere um ponto de restauração imediato ou baixe arquivos externos de segurança (.JSON e .XLSX).
+                  </Typography>
+                </div>
+
+                <FormControl fullWidth size="small">
+                  <InputLabel>Módulos Incluídos no Backup</InputLabel>
+                  <Select
+                    value={manualBackupScope}
+                    label="Módulos Incluídos no Backup"
+                    onChange={(e) => setManualBackupScope(e.target.value as BackupScope)}
+                  >
+                    <MenuItem value="INVENTARIO_E_COMPRAS">📦🛒 Inventário & Compras (Foco Crítico)</MenuItem>
+                    <MenuItem value="COMPLETO">🏛️ Banco de Dados Completo (ERP Integral)</MenuItem>
+                    <MenuItem value="APENAS_INVENTARIO">📦 Apenas Inventário, Produtos e Movimentações</MenuItem>
+                    <MenuItem value="APENAS_COMPRAS">🛒 Apenas Compras (SCs, OCs e Centros de Custo)</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Rótulo / Motivo do Ponto de Restauração (Opcional)"
+                  placeholder="Ex: Backup pré-contagem de inventário SP ou fechamento de compras"
+                  value={manualBackupNotes}
+                  onChange={(e) => setManualBackupNotes(e.target.value)}
+                />
+
+                <div className="grid grid-cols-1 gap-2.5 pt-1">
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={handleRunBackupNow}
+                    startIcon={<Play className="w-4 h-4 text-white" />}
+                    sx={{ color: '#ffffff !important' }}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs py-2.5 rounded-xl"
+                  >
+                    Criar Ponto de Restauração no Cofre Agora
+                  </Button>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Button
+                      variant="contained"
+                      onClick={() => handleExportBackupJSON(manualBackupScope)}
+                      startIcon={<FileJson className="w-4 h-4 text-white" />}
+                      sx={{ color: '#ffffff !important' }}
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2 rounded-xl"
+                    >
+                      Baixar Backup (.JSON)
+                    </Button>
+
+                    <Button
+                      variant="contained"
+                      color="success"
+                      onClick={handleExportSecurityExcel}
+                      startIcon={<FileSpreadsheet className="w-4 h-4 text-white" />}
+                      sx={{ color: '#ffffff !important' }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 rounded-xl"
+                    >
+                      Espelho Excel (.XLSX)
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* RESTAURAÇÃO DE ARQUIVO EXTERNO */}
+              <Box className="p-4 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 space-y-3 mt-4">
+                <Typography variant="subtitle2" className="font-extrabold text-slate-900 dark:text-white flex items-center gap-2 text-xs">
+                  <Upload className="w-4 h-4 text-amber-600" />
+                  Restaurar a partir de Arquivo JSON Externo
+                </Typography>
+
+                <FormControl fullWidth size="small">
+                  <InputLabel>Escopo a Restaurar do Arquivo</InputLabel>
+                  <Select
+                    value={restoreScopeFile}
+                    label="Escopo a Restaurar do Arquivo"
+                    onChange={(e) => setRestoreScopeFile(e.target.value as BackupScope)}
+                  >
+                    <MenuItem value="COMPLETO">Restaurar Tudo (Estado Completo)</MenuItem>
+                    <MenuItem value="INVENTARIO_E_COMPRAS">Restaurar Inventário & Compras</MenuItem>
+                    <MenuItem value="APENAS_INVENTARIO">Restaurar Apenas Inventário & Saldos</MenuItem>
+                    <MenuItem value="APENAS_COMPRAS">Restaurar Apenas Compras (SCs e OCs)</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={safetyBackupOnFileImport}
+                      onChange={(e) => setSafetyBackupOnFileImport(e.target.checked)}
+                    />
+                  }
+                  label={
+                    <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                      Salvar snapshot automático do estado atual antes de importar
+                    </span>
+                  }
+                />
+
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  component="label"
+                  color="warning"
+                  startIcon={<Upload className="w-4 h-4" />}
+                  className="font-extrabold text-xs py-2 rounded-xl bg-white dark:bg-slate-900"
+                >
+                  Carregar Arquivo (.JSON) e Restaurar
+                  <input type="file" accept=".json" hidden onChange={handleImportBackup} />
+                </Button>
+              </Box>
+            </Card>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Box className="p-6 border border-slate-200 dark:border-slate-800 rounded-2xl bg-slate-50 dark:bg-slate-900/50 space-y-3">
-              <Typography variant="subtitle1" className="font-bold flex items-center gap-2">
-                <Download className="w-5 h-5 text-blue-600" />
-                Exportar Backup Completo
-              </Typography>
-              <Typography variant="body2" className="text-slate-600 dark:text-slate-400 text-xs">
-                Gera um arquivo JSON contendo todos os produtos, movimentações, ordens de compra, patrimônios, usuários e logs de auditoria.
-              </Typography>
-              <Button
-                variant="contained"
-                onClick={handleExportBackup}
-                className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs py-2.5"
-              >
-                Download do Backup JSON
-              </Button>
-            </Box>
+          {/* COFRE DE PONTOS DE RESTAURAÇÃO (HISTÓRICO DE BACKUPS EXECUTADOS) */}
+          <Card className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-4 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div>
+                <Typography variant="subtitle1" className="font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                  <HardDrive className="w-5 h-5 text-indigo-600" />
+                  3. Cofre de Pontos de Restauração (Histórico Auditado de Backups)
+                </Typography>
+                <Typography variant="caption" className="text-slate-500 dark:text-slate-400 block">
+                  Selecione qualquer ponto de restauração abaixo para inspecionar os dados protegidos de Inventário e Compras, baixar o pacote JSON ou realizar *Rollback* seletivo.
+                </Typography>
+              </div>
+              <Chip
+                label={`${snapshots.length} Pontos Disponíveis para Restauração Imediata`}
+                color="primary"
+                size="small"
+                className="font-bold text-[11px]"
+              />
+            </div>
 
-            <Box className="p-6 border border-slate-200 dark:border-slate-800 rounded-2xl bg-slate-50 dark:bg-slate-900/50 space-y-3">
-              <Typography variant="subtitle1" className="font-bold flex items-center gap-2">
-                <Upload className="w-5 h-5 text-amber-600" />
-                Restaurar do Arquivo de Backup
-              </Typography>
-              <Typography variant="body2" className="text-slate-600 dark:text-slate-400 text-xs">
-                Carregue um arquivo JSON de backup previamente exportado. Esta ação substituirá o estado atual com auditoria.
-              </Typography>
-              <Button
-                variant="outlined"
-                component="label"
-                color="warning"
-                className="font-bold text-xs py-2"
-              >
-                Carregar e Restaurar Backup
-                <input type="file" accept=".json" hidden onChange={handleImportBackup} />
-              </Button>
-            </Box>
-          </div>
-        </Card>
+            <div className="overflow-x-auto">
+              <Table size="small">
+                <TableHead>
+                  <TableRow className="bg-slate-50 dark:bg-slate-800/70">
+                    <TableCell className="font-extrabold text-xs text-slate-700 dark:text-slate-200">Código / Data</TableCell>
+                    <TableCell className="font-extrabold text-xs text-slate-700 dark:text-slate-200">Origem / Gatilho</TableCell>
+                    <TableCell className="font-extrabold text-xs text-slate-700 dark:text-slate-200">Escopo Protegido</TableCell>
+                    <TableCell className="font-extrabold text-xs text-slate-700 dark:text-slate-200">Resumo Inventário & Compras</TableCell>
+                    <TableCell className="font-extrabold text-xs text-slate-700 dark:text-slate-200">Integridade / Tamanho</TableCell>
+                    <TableCell align="right" className="font-extrabold text-xs text-slate-700 dark:text-slate-200">Ações de Recuperação</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {snapshots.map((snap) => {
+                    const trig = TRIGGER_LABELS[snap.triggerType] || { label: snap.triggerType, color: 'info' };
+                    return (
+                      <TableRow key={snap.id} hover className="border-b border-slate-100 dark:border-slate-800">
+                        <TableCell>
+                          <div className="font-extrabold text-xs text-slate-900 dark:text-white font-mono">
+                            {snap.code}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {new Date(snap.createdAt).toLocaleString('pt-BR')}
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            Por: {snap.createdBy}
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <Chip
+                            label={trig.label}
+                            color={trig.color}
+                            size="small"
+                            className="font-bold text-[10px] h-5"
+                          />
+                          {snap.notes && (
+                            <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 max-w-xs line-clamp-2">
+                              {snap.notes}
+                            </div>
+                          )}
+                        </TableCell>
+
+                        <TableCell>
+                          <span className="font-bold text-xs text-slate-800 dark:text-slate-200 block">
+                            {SCOPE_LABELS[snap.scope]}
+                          </span>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                            📦 Inventário: {snap.metrics.productsCount} SKUs | {snap.metrics.inventoriesCount} Aud. (R$ {snap.metrics.totalInventoryValue.toLocaleString('pt-BR', { maximumFractionDigits: 0 })})
+                          </div>
+                          <div className="text-[11px] text-indigo-700 dark:text-indigo-400 font-semibold">
+                            🛒 Compras: {snap.metrics.purchaseRequestsCount} SCs | {snap.metrics.purchaseOrdersCount} OCs (R$ {snap.metrics.totalPurchasesValue.toLocaleString('pt-BR', { maximumFractionDigits: 0 })})
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="font-mono text-[10px] text-slate-700 dark:text-slate-300 font-bold">
+                            {snap.checksum.slice(0, 17)}...
+                          </div>
+                          <div className="text-[10px] text-emerald-600 font-bold">
+                            ✓ Verificado ({formatBytes(snap.sizeBytes)})
+                          </div>
+                        </TableCell>
+
+                        <TableCell align="right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Tooltip title="Inspecionar Detalhes do Backup">
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={() => setInspectSnapshot(snap)}
+                                className="text-[11px] font-bold py-1 px-2 rounded-lg"
+                              >
+                                Detalhes
+                              </Button>
+                            </Tooltip>
+
+                            <Tooltip title="Baixar JSON deste Ponto de Restauração">
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={() => handleExportBackupJSON(snap.scope, snap)}
+                                startIcon={<Download className="w-3.5 h-3.5" />}
+                                className="text-[11px] font-bold py-1 px-2 rounded-lg"
+                              >
+                                JSON
+                              </Button>
+                            </Tooltip>
+
+                            <Tooltip title="Restaurar Dados para este Ponto">
+                              <Button
+                                size="small"
+                                variant="contained"
+                                color="primary"
+                                onClick={() => {
+                                  setRestoreTargetSnapshot(snap);
+                                  setRestoreSnapshotScope(snap.scope);
+                                  setCreatePreRestoreBackup(true);
+                                }}
+                                startIcon={<RotateCcw className="w-3.5 h-3.5 text-white" />}
+                                sx={{ color: '#ffffff !important' }}
+                                className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold py-1 px-2.5 rounded-lg"
+                              >
+                                Restaurar
+                              </Button>
+                            </Tooltip>
+
+                            <Tooltip title="Excluir Ponto de Restauração">
+                              <IconButton
+                                size="small"
+                                onClick={() => handleDeleteSnapshot(snap)}
+                                className="text-slate-400 hover:text-rose-600 p-1"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </IconButton>
+                            </Tooltip>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+        </div>
       )}
 
       {currentTab === 4 && (
@@ -395,6 +1186,149 @@ export const Administracao: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* MODAL DE INSPEÇÃO DE SNAPSHOT DE BACKUP */}
+      <Dialog open={Boolean(inspectSnapshot)} onClose={() => setInspectSnapshot(null)} maxWidth="sm" fullWidth>
+        {inspectSnapshot && (
+          <>
+            <DialogTitle className="font-extrabold flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-blue-600" />
+                <span>Radiografia do Ponto de Restauração: {inspectSnapshot.code}</span>
+              </div>
+              <Chip label="ÍNTEGRO" color="success" size="small" className="font-bold text-[10px]" />
+            </DialogTitle>
+            <DialogContent dividers className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-xs bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div>
+                  <span className="text-slate-500 block">Data / Hora de Geração:</span>
+                  <strong className="text-slate-900 dark:text-white">{new Date(inspectSnapshot.createdAt).toLocaleString('pt-BR')}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Responsável / Gatilho:</span>
+                  <strong className="text-slate-900 dark:text-white">{inspectSnapshot.createdBy}</strong>
+                </div>
+                <div className="col-span-2">
+                  <span className="text-slate-500 block">Assinatura de Integridade (Checksum):</span>
+                  <strong className="font-mono text-blue-700 dark:text-blue-300">{inspectSnapshot.checksum}</strong>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Box className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/50 dark:bg-emerald-950/20 space-y-1">
+                  <Typography variant="caption" className="font-extrabold uppercase text-emerald-700 block">
+                    📦 Dados de Inventário & Estoque
+                  </Typography>
+                  <div className="text-xs space-y-1 text-slate-700 dark:text-slate-200">
+                    <div>Produtos / SKUs: <strong>{inspectSnapshot.metrics.productsCount}</strong></div>
+                    <div>Movimentações: <strong>{inspectSnapshot.metrics.movementsCount}</strong></div>
+                    <div>Transferências: <strong>{inspectSnapshot.metrics.transfersCount}</strong></div>
+                    <div>Requisições Internas: <strong>{inspectSnapshot.metrics.requisitionsCount}</strong></div>
+                    <div>Auditorias Físicas: <strong>{inspectSnapshot.metrics.inventoriesCount}</strong></div>
+                    <div className="pt-1 font-extrabold text-emerald-800 dark:text-emerald-300">
+                      Valor Protegido: R$ {inspectSnapshot.metrics.totalInventoryValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                </Box>
+
+                <Box className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/50 dark:bg-indigo-950/20 space-y-1">
+                  <Typography variant="caption" className="font-extrabold uppercase text-indigo-700 block">
+                    🛒 Dados de Compras & Orçamento
+                  </Typography>
+                  <div className="text-xs space-y-1 text-slate-700 dark:text-slate-200">
+                    <div>Solicitações de Compra (SC): <strong>{inspectSnapshot.metrics.purchaseRequestsCount}</strong></div>
+                    <div>Ordens de Compra (OC): <strong>{inspectSnapshot.metrics.purchaseOrdersCount}</strong></div>
+                    <div>Centros de Custo: <strong>{inspectSnapshot.metrics.costCentersCount}</strong></div>
+                    <div>Patrimônios Ativos: <strong>{inspectSnapshot.metrics.assetsCount}</strong></div>
+                    <div className="pt-1 font-extrabold text-indigo-800 dark:text-indigo-300">
+                      Valor Protegido: R$ {inspectSnapshot.metrics.totalPurchasesValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                </Box>
+              </div>
+
+              {inspectSnapshot.notes && (
+                <Alert severity="info" className="text-xs">
+                  <strong>Observação do Snapshot:</strong> {inspectSnapshot.notes}
+                </Alert>
+              )}
+            </DialogContent>
+            <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+              <Button onClick={() => setInspectSnapshot(null)} color="inherit">Fechar</Button>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={() => handleExportBackupJSON(inspectSnapshot.scope, inspectSnapshot)}
+                startIcon={<Download className="w-4 h-4 text-white" />}
+                sx={{ color: '#ffffff !important' }}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
+              >
+                Baixar Arquivo JSON deste Ponto
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+
+      {/* MODAL DE CONFIRMAÇÃO DE RESTAURAÇÃO (ROLLBACK SEGURO) */}
+      <Dialog open={Boolean(restoreTargetSnapshot)} onClose={() => setRestoreTargetSnapshot(null)} maxWidth="sm" fullWidth>
+        {restoreTargetSnapshot && (
+          <>
+            <DialogTitle className="font-extrabold flex items-center gap-2 border-b border-slate-200 dark:border-slate-800">
+              <RotateCcw className="w-5 h-5 text-blue-600" />
+              Restaurar Dados do Ponto {restoreTargetSnapshot.code}
+            </DialogTitle>
+            <DialogContent dividers className="space-y-4">
+              <Alert severity="warning" className="text-xs">
+                Você está prestes a restaurar as informações do sistema para o estado gravado em{' '}
+                <strong>{new Date(restoreTargetSnapshot.createdAt).toLocaleString('pt-BR')}</strong>.
+              </Alert>
+
+              <FormControl fullWidth size="small">
+                <InputLabel>Selecione os Módulos que Deseja Restaurar</InputLabel>
+                <Select
+                  value={restoreSnapshotScope}
+                  label="Selecione os Módulos que Deseja Restaurar"
+                  onChange={(e) => setRestoreSnapshotScope(e.target.value as BackupScope)}
+                >
+                  <MenuItem value="INVENTARIO_E_COMPRAS">📦🛒 Restaurar Inventário/Almoxarifado + Compras (SCs e OCs)</MenuItem>
+                  <MenuItem value="APENAS_INVENTARIO">📦 Restaurar Apenas Inventário, Produtos e Movimentações</MenuItem>
+                  <MenuItem value="APENAS_COMPRAS">🛒 Restaurar Apenas Compras (SCs, OCs e Centros de Custo)</MenuItem>
+                  <MenuItem value="COMPLETO">🏛️ Restaurar Banco de Dados Completo</MenuItem>
+                </Select>
+              </FormControl>
+
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={createPreRestoreBackup}
+                    onChange={(e) => setCreatePreRestoreBackup(e.target.checked)}
+                    color="primary"
+                  />
+                }
+                label={
+                  <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    Criar automaticamente um Ponto de Restauração de Segurança do estado atual antes de aplicar a restauração (Recomendado)
+                  </span>
+                }
+              />
+            </DialogContent>
+            <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+              <Button onClick={() => setRestoreTargetSnapshot(null)} color="inherit">Cancelar</Button>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleConfirmSnapshotRestore}
+                startIcon={<RotateCcw className="w-4 h-4 text-white" />}
+                sx={{ color: '#ffffff !important' }}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs"
+              >
+                Confirmar e Restaurar Dados
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
 
       {/* USER MODAL */}
       <Dialog open={userModalOpen} onClose={() => setUserModalOpen(false)} maxWidth="sm" fullWidth>
@@ -633,7 +1567,13 @@ export const Administracao: React.FC = () => {
           </DialogContent>
           <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
             <Button onClick={() => setUserModalOpen(false)} color="inherit">Cancelar</Button>
-            <Button type="submit" variant="contained" color="primary" className="font-bold">
+            <Button
+              type="submit"
+              variant="contained"
+              color="primary"
+              sx={{ color: '#ffffff !important' }}
+              className="font-bold text-white"
+            >
               {editingUser.id ? 'Atualizar Usuário' : 'Cadastrar Usuário'}
             </Button>
           </DialogActions>
@@ -642,7 +1582,7 @@ export const Administracao: React.FC = () => {
 
       <Snackbar
         open={Boolean(toastMessage)}
-        autoHideDuration={4000}
+        autoHideDuration={4500}
         onClose={() => setToastMessage(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >

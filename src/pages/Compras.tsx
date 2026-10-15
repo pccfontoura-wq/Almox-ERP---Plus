@@ -561,7 +561,7 @@ export const Compras: React.FC = () => {
     {
       id: 'itemsCount',
       label: 'Itens Solicitados',
-      accessor: (r) => r.items.length,
+      accessor: (r) => r.items.map(i => `${i.productName} (${i.quantity} ${i.unit})`).join(', '),
       render: (r) => {
         const approvedCount = r.items.filter(i => i.status === 'APROVADO').length;
         const pendingCount = r.items.filter(i => i.status === 'PENDENTE').length;
@@ -577,6 +577,19 @@ export const Compras: React.FC = () => {
           </div>
         );
       }
+    },
+    {
+      id: 'category',
+      label: 'Categoria',
+      accessor: (r) =>
+        Array.from(
+          new Set(
+            r.items.map(
+              i => i.category || state.products.find(p => p.id === i.productId)?.category || 'Geral'
+            )
+          )
+        ).join(', '),
+      sortable: true
     },
     {
       id: 'priority',
@@ -667,6 +680,19 @@ export const Compras: React.FC = () => {
     },
     { id: 'supplierName', label: 'Fornecedor', accessor: (po) => po.supplierName, sortable: true },
     { id: 'branch', label: 'Unidade', accessor: (po) => po.branch },
+    {
+      id: 'category',
+      label: 'Categoria',
+      accessor: (po) =>
+        Array.from(
+          new Set(
+            po.items.map(
+              i => i.category || state.products.find(p => p.id === i.productId)?.category || 'Geral'
+            )
+          )
+        ).join(', '),
+      sortable: true
+    },
     {
       id: 'totalValue',
       label: 'Valor Total',
@@ -876,7 +902,7 @@ export const Compras: React.FC = () => {
             title="Solicitações de Compra de Materiais (SC)"
             subTitle="Requisições de suprimentos enviadas ao setor de compras com aprovação item a item."
             columns={requestColumns}
-            data={purchaseRequests}
+            data={state.purchaseRequests || []}
             onAddClick={handleOpenNewRequestModal}
             addButtonLabel="Nova Solicitação de Compra"
             canEditOrAdd={canEdit}
@@ -891,7 +917,7 @@ export const Compras: React.FC = () => {
             title="Ordens de Compra Empresariais (OC / PO)"
             subTitle="Acompanhamento do pipeline oficial de fornecedores, frete e recebimento com entrada em estoque."
             columns={poColumns}
-            data={purchaseOrders}
+            data={state.purchaseOrders || []}
             onAddClick={() => setPoModalOpen(true)}
             addButtonLabel="Emitir Nova Ordem de Compra Direta"
             canEditOrAdd={canEdit}

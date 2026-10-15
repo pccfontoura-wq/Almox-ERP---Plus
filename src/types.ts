@@ -390,6 +390,56 @@ export interface SystemSettings {
   backupIntervalDays?: number;
 }
 
+export type BackupScope = 'COMPLETO' | 'INVENTARIO_E_COMPRAS' | 'APENAS_INVENTARIO' | 'APENAS_COMPRAS';
+
+export type BackupFrequency = 'A_CADA_6_HORAS' | 'DIARIO' | 'SEMANAL' | 'GATILHO_CRITICO';
+
+export interface BackupRoutineConfig {
+  enabled: boolean;
+  frequency: BackupFrequency;
+  scheduledTime: string; // e.g. '02:00'
+  defaultScope: BackupScope;
+  retentionLimit: number; // e.g. 10, 15, 30 snapshots
+  autoBackupOnInventoryReconcile: boolean;
+  autoBackupOnPurchaseOrderApproval: boolean;
+  verifyIntegrityOnBackup: boolean;
+  notifyOnSuccess: boolean;
+  lastRunAt?: string;
+  nextScheduledAt?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface BackupMetricsSummary {
+  productsCount: number;
+  movementsCount: number;
+  transfersCount: number;
+  requisitionsCount: number;
+  inventoriesCount: number;
+  purchaseRequestsCount: number;
+  purchaseOrdersCount: number;
+  costCentersCount: number;
+  assetsCount: number;
+  totalInventoryValue: number;
+  totalPurchasesValue: number;
+}
+
+export interface BackupSnapshot {
+  id: string;
+  code: string; // e.g. BKP-20261001-0200
+  createdAt: string;
+  createdBy: string;
+  createdByEmail?: string;
+  triggerType: 'AUTOMATICO_AGENDADO' | 'MANUAL_SOB_DEMANDA' | 'GATILHO_OPERACIONAL' | 'PRE_RESTAURACAO';
+  scope: BackupScope;
+  notes?: string;
+  sizeBytes: number;
+  checksum: string;
+  integrityVerified: boolean;
+  metrics: BackupMetricsSummary;
+  payload: Partial<AppState>;
+}
+
 export interface AppState {
   branches: BranchInfo[];
   products: Product[];
@@ -404,4 +454,7 @@ export interface AppState {
   users: User[];
   auditLogs: AuditLog[];
   notifications: SystemNotification[];
+  backupConfig?: BackupRoutineConfig;
+  backupSnapshots?: BackupSnapshot[];
 }
+

@@ -126,11 +126,51 @@ export const AssistenteIA: React.FC = () => {
 
     try {
       const state = dataService.getState();
+
+      // Cálculo de métricas financeiras globais e por unidade
+      const totalInventoryValue = state.products
+        .filter(p => p.active !== false)
+        .reduce((acc, p) => {
+          const totalUnits = Object.values(p.stockByBranch || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+          return acc + totalUnits * (p.unitPrice || 0);
+        }, 0);
+
+      const activePOs = state.purchaseOrders.filter(po => po.status !== 'CANCELADO');
+      const totalPurchasedValue = activePOs.reduce((acc, po) => acc + (po.totalValue || 0), 0);
+
+      const posByBranch: Record<string, { count: number; total: number }> = {};
+      activePOs.forEach(po => {
+        if (!posByBranch[po.branch]) posByBranch[po.branch] = { count: 0, total: 0 };
+        posByBranch[po.branch].count += 1;
+        posByBranch[po.branch].total += (po.totalValue || 0);
+      });
+
+      const totalCostCenterBudget = state.costCenters.reduce((acc, c) => acc + (c.budget || 0), 0);
+      const totalCostCenterSpent = state.costCenters.reduce((acc, c) => acc + (c.spent || 0), 0);
+
+      const costCentersBreakdown = state.costCenters.map(c => ({
+        codigo: c.code,
+        nome: c.name,
+        unidade: c.branch,
+        orcamento: c.budget,
+        gastoRealizado: c.spent,
+        saldoRestante: c.budget - c.spent
+      }));
+
+      const recentOrders = activePOs.slice(0, 8).map(po => ({
+        codigo: po.code,
+        unidade: po.branch,
+        fornecedor: po.supplierName,
+        valorTotal: po.totalValue,
+        status: po.status
+      }));
+
       const productsContext = state.products.map(p => ({
         sku: p.code,
         nome: p.name,
         categoria: p.category,
         estoqueLocal: p.stockByBranch[selectedBranch === 'GLOBAL' ? 'SP' : selectedBranch] || 0,
+        estoqueGlobal: Object.values(p.stockByBranch || {}).reduce((s, q) => s + (Number(q) || 0), 0),
         min: p.minStock,
         preco: p.unitPrice
       }));
@@ -139,7 +179,13 @@ export const AssistenteIA: React.FC = () => {
         totalProducts: state.products.length,
         pendingRequisitions: state.requisitions.filter(r => r.status === 'PENDENTE').length,
         openPurchaseOrders: state.purchaseOrders.filter(po => po.status !== 'ENTREGUE').length,
-        inTransitTransfers: state.transfers.filter(t => t.status === 'EM_TRANSITO').length
+        inTransitTransfers: state.transfers.filter(t => t.status === 'EM_TRANSITO').length,
+        valorTotalEstoque: totalInventoryValue,
+        gastoTotalOrdensCompra: totalPurchasedValue,
+        gastosPorUnidade: posByBranch,
+        orcamentoTotalCentrosCusto: totalCostCenterBudget,
+        gastoTotalCentrosCusto: totalCostCenterSpent,
+        saldoDisponivelCentrosCusto: totalCostCenterBudget - totalCostCenterSpent
       };
 
       const response = await fetch('/api/gemini', {
@@ -152,7 +198,9 @@ export const AssistenteIA: React.FC = () => {
             role: currentUser?.role,
             branch: selectedBranch,
             summaryData,
-            products: productsContext.slice(0, 15)
+            costCenters: costCentersBreakdown,
+            recentOrders,
+            products: productsContext.slice(0, 20)
           }
         })
       });

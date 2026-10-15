@@ -55,11 +55,13 @@ export const Almoxarifado: React.FC = () => {
 
   const state = dataService.getState();
   const products = dataService.getProducts(selectedBranch);
-  const movements = state.movements.filter(m => selectedBranch === 'GLOBAL' || m.branch === selectedBranch);
-  const transfers = state.transfers.filter(t => 
-    selectedBranch === 'GLOBAL' || t.originBranch === selectedBranch || t.destinationBranch === selectedBranch
-  );
-  const requisitions = state.requisitions.filter(r => selectedBranch === 'GLOBAL' || r.branch === selectedBranch);
+  const movements = state.movements;
+  const transfers = state.transfers;
+  const requisitions = state.requisitions;
+
+  const getProductCategory = (productId: string) => {
+    return state.products.find(p => p.id === productId)?.category || 'Geral';
+  };
 
   const canEdit = currentUser?.role !== 'Visitante';
 
@@ -141,6 +143,7 @@ export const Almoxarifado: React.FC = () => {
       />
     )},
     { id: 'productName', label: 'Produto', accessor: (m) => m.productName },
+    { id: 'category', label: 'Categoria', accessor: (m) => getProductCategory(m.productId), sortable: true },
     { id: 'quantity', label: 'Quantidade', accessor: (m) => `${m.quantity} ${m.type === 'ENTRADA' ? '(+)' : '(-)'}` },
     { id: 'totalPrice', label: 'Valor Total', accessor: (m) => `R$ ${m.totalPrice.toFixed(2)}` },
     { id: 'branch', label: 'Unidade', accessor: (m) => m.branch },
@@ -153,6 +156,7 @@ export const Almoxarifado: React.FC = () => {
     { id: 'originBranch', label: 'Origem', accessor: (t) => t.originBranch },
     { id: 'destinationBranch', label: 'Destino', accessor: (t) => t.destinationBranch },
     { id: 'productName', label: 'Produto', accessor: (t) => t.productName },
+    { id: 'category', label: 'Categoria', accessor: (t) => getProductCategory(t.productId), sortable: true },
     { id: 'quantity', label: 'Qtd', accessor: (t) => t.quantity },
     {
       id: 'status',
@@ -196,9 +200,21 @@ export const Almoxarifado: React.FC = () => {
 
   const requisitionColumns: Column<Requisition>[] = [
     { id: 'code', label: 'Código', accessor: (r) => r.code, sortable: true },
+    { id: 'createdAt', label: 'Data Solicitação', accessor: (r) => new Date(r.createdAt).toLocaleDateString('pt-BR'), sortable: true },
     { id: 'requestedBy', label: 'Solicitante', accessor: (r) => r.requestedBy },
     { id: 'branch', label: 'Unidade', accessor: (r) => r.branch },
     { id: 'costCenterName', label: 'Centro de Custo', accessor: (r) => r.costCenterName },
+    {
+      id: 'itemsSummary',
+      label: 'Materiais Solicitados',
+      accessor: (r) => r.items.map(i => `${i.productName} (${i.requestedQuantity} ${i.unit})`).join(', ')
+    },
+    {
+      id: 'category',
+      label: 'Categoria',
+      accessor: (r) => Array.from(new Set(r.items.map(i => getProductCategory(i.productId)))).join(', '),
+      sortable: true
+    },
     { id: 'priority', label: 'Prioridade', accessor: (r) => r.priority },
     {
       id: 'status',
