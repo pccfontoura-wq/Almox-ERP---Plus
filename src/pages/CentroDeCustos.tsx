@@ -7,7 +7,7 @@ import {
 import {
   Calculator, Plus, ShoppingBag, Truck, Package, HelpCircle, Eye,
   BarChart3, Scale, Layers, CheckCircle2, AlertTriangle, ArrowUpRight,
-  TrendingDown, TrendingUp, Info, DollarSign
+  TrendingDown, TrendingUp, Info, DollarSign, ArrowRightLeft, ShieldCheck, Sliders
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -17,7 +17,11 @@ import { Breadcrumb } from '../components/Breadcrumb';
 import { DataTable, Column } from '../components/DataTable';
 import { CostCenter, Branch, CostCenterComparison, CostCenterProductBalance } from '../types';
 
-export const CentroDeCustos: React.FC = () => {
+interface CentroDeCustosProps {
+  onNavigate?: (tab: string) => void;
+}
+
+export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) => {
   const { currentUser } = useAuth();
   const { selectedBranch, refreshData } = useApp();
 
@@ -26,6 +30,23 @@ export const CentroDeCustos: React.FC = () => {
   const [selectedCcId, setSelectedCcId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState(0);
   const [showExplanation, setShowExplanation] = useState(false);
+
+  // Estados de Suplementação Orçamentária (Aporte Master / Diretoria)
+  const [supplementModalOpen, setSupplementModalOpen] = useState(false);
+  const [supplementCcId, setSupplementCcId] = useState<string>('');
+  const [supplementAmount, setSupplementAmount] = useState<number>(10000);
+  const [supplementReason, setSupplementReason] = useState<string>('');
+  const [supplementError, setSupplementError] = useState<string | null>(null);
+
+  // Estados de Remanejamento entre Centros de Custo
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [transferFromCcId, setTransferFromCcId] = useState<string>('');
+  const [transferToCcId, setTransferToCcId] = useState<string>('');
+  const [transferAmount, setTransferAmount] = useState<number>(5000);
+  const [transferReason, setTransferReason] = useState<string>('');
+  const [transferError, setTransferError] = useState<string | null>(null);
+
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
   const [ccForm, setCcForm] = useState<Partial<CostCenter>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -234,6 +255,72 @@ export const CentroDeCustos: React.FC = () => {
     }
   };
 
+  const isMaster = currentUser?.role === 'Master';
+  const budgetPolicy = dataService.getBudgetPolicy();
+
+  // Setores com estouro orçamentário
+  const overBudgetCenters = useMemo(() => {
+    return comparisons.filter(c => c.totalPurchased > c.budget || c.totalDelivered > c.budget);
+  }, [comparisons]);
+
+  const handleOpenSupplement = (ccId?: string) => {
+    setSupplementCcId(ccId || (comparisons[0]?.costCenter.id || ''));
+    setSupplementAmount(10000);
+    setSupplementReason('');
+    setSupplementError(null);
+    setSupplementModalOpen(true);
+  };
+
+  const handleOpenTransfer = (fromId?: string) => {
+    setTransferFromCcId(fromId || (comparisons[0]?.costCenter.id || ''));
+    setTransferToCcId(comparisons.find(c => c.costCenter.id !== fromId)?.costCenter.id || '');
+    setTransferAmount(5000);
+    setTransferReason('');
+    setTransferError(null);
+    setTransferModalOpen(true);
+  };
+
+  const handleSupplementSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setSupplementError(null);
+    try {
+      dataService.supplementCostCenterBudget(
+        supplementCcId,
+        Number(supplementAmount),
+        supplementReason.trim(),
+        currentUser
+      );
+      setSupplementModalOpen(false);
+      setActionSuccess('Suplementação orçamentária aprovada e aplicada com sucesso!');
+      setTimeout(() => setActionSuccess(null), 5000);
+      refreshData();
+    } catch (err: any) {
+      setSupplementError(err.message || 'Erro ao realizar suplementação.');
+    }
+  };
+
+  const handleTransferSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setTransferError(null);
+    try {
+      dataService.transferCostCenterBudget(
+        transferFromCcId,
+        transferToCcId,
+        Number(transferAmount),
+        transferReason.trim(),
+        currentUser
+      );
+      setTransferModalOpen(false);
+      setActionSuccess('Remanejamento de verba entre centros de custo efetuado com sucesso!');
+      setTimeout(() => setActionSuccess(null), 5000);
+      refreshData();
+    } catch (err: any) {
+      setTransferError(err.message || 'Erro ao transferir verba.');
+    }
+  };
+
   return (
     <Box className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -298,6 +385,133 @@ export const CentroDeCustos: React.FC = () => {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* FEEDBACK DE AÇÃO COM SUCESSO */}
+      {actionSuccess && (
+        <Alert severity="success" className="rounded-xl shadow-xs font-medium">
+          {actionSuccess}
+        </Alert>
+      )}
+
+      {/* BARRA DE GOVERNANÇA ORÇAMENTÁRIA & AÇÕES DA DIRETORIA */}
+      <Card className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm p-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-blue-600/10 dark:bg-blue-950 text-blue-600 dark:text-blue-400">
+              <ShieldCheck className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Typography variant="subtitle2" className="font-extrabold text-slate-900 dark:text-slate-100 text-sm">
+                  Governança de Estouro de Centro de Custo:
+                </Typography>
+                <Chip
+                  label={
+                    budgetPolicy.mode === 'ALCADA_DIRETORIA_MASTER'
+                      ? 'Opção 3: Alçada Extraordinária (Diretoria / Master) [Ativa]'
+                      : budgetPolicy.mode === 'BLOQUEIO_RIGIDO'
+                      ? 'Opção 1: Bloqueio Rígido (Hard Stop) [Ativa]'
+                      : budgetPolicy.mode === 'INFORMATIVO_AVISO'
+                      ? 'Opção 2: Informativo com Alerta [Ativa]'
+                      : `Opção 4: Tolerância de ${budgetPolicy.tolerancePercentage}% [Ativa]`
+                  }
+                  color="primary"
+                  size="small"
+                  className="font-bold text-xs"
+                />
+              </div>
+              <Typography variant="caption" className="text-slate-500 block mt-0.5 text-xs">
+                {budgetPolicy.mode === 'ALCADA_DIRETORIA_MASTER'
+                  ? 'Compras acima do orçamento provisionado são retidas e exigem aprovação formal da Diretoria/Master com justificativa.'
+                  : budgetPolicy.mode === 'BLOQUEIO_RIGIDO'
+                  ? 'Novas compras acima do orçamento são travadas imediatamente no ERP sem exceção.'
+                  : budgetPolicy.mode === 'INFORMATIVO_AVISO'
+                  ? 'Compras acima do orçamento são autorizadas exibindo alerta visual nos relatórios e auditoria.'
+                  : `Permite compras até ${budgetPolicy.tolerancePercentage}% acima da dotação antes de exigir autorização da Diretoria.`}
+              </Typography>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap self-end lg:self-center">
+            {isMaster && (
+              <>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="primary"
+                  startIcon={<DollarSign className="w-4 h-4" />}
+                  onClick={() => handleOpenSupplement()}
+                  className="font-bold text-xs capitalize"
+                >
+                  Aporte / Suplementação
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="secondary"
+                  startIcon={<ArrowRightLeft className="w-4 h-4" />}
+                  onClick={() => handleOpenTransfer()}
+                  className="font-bold text-xs capitalize"
+                >
+                  Remanejar Verba
+                </Button>
+              </>
+            )}
+
+            {onNavigate && (
+              <Button
+                size="small"
+                variant="text"
+                color="inherit"
+                startIcon={<Sliders className="w-4 h-4 text-slate-500" />}
+                onClick={() => onNavigate('configuracoes')}
+                className="font-bold text-xs text-slate-700 dark:text-slate-300"
+              >
+                Gerenciar Regras
+              </Button>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {/* ALERTA DE ESTOURO ORÇAMENTÁRIO (SE HOUVER SETORES EXCEDIDOS) */}
+      {overBudgetCenters.length > 0 && (
+        <Alert
+          severity="warning"
+          icon={<AlertTriangle className="w-5 h-5 text-amber-600" />}
+          className="rounded-2xl border border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/40"
+          action={
+            isMaster ? (
+              <Button
+                color="warning"
+                size="small"
+                variant="contained"
+                onClick={() => handleOpenSupplement(overBudgetCenters[0].costCenter.id)}
+                className="font-bold text-xs capitalize"
+              >
+                Aportar Verba Imediata
+              </Button>
+            ) : undefined
+          }
+        >
+          <div className="text-xs text-amber-900 dark:text-amber-200">
+            <strong>Atenção da Diretoria:</strong> {overBudgetCenters.length} centro(s) de custo ultrapassaram a dotação orçamentária provisionada:
+            <ul className="list-disc list-inside mt-1 space-y-0.5">
+              {overBudgetCenters.map(c => {
+                const overrun = Math.max(0, c.totalPurchased - c.budget);
+                return (
+                  <li key={c.costCenter.id}>
+                    <strong>{c.costCenter.code} ({c.costCenter.name})</strong>: Comprado R$ {c.totalPurchased.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} vs. Orçamento de R$ {c.budget.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Excedente: R$ {overrun.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="mt-1 text-[11px] text-amber-800 dark:text-amber-300">
+              Novas compras para estes setores estão sob alçada extraordinária da Diretoria.
+            </div>
+          </div>
+        </Alert>
       )}
 
       {/* CARDS DE TOTAIS CONSOLIDADOS */}
@@ -795,6 +1009,183 @@ export const CentroDeCustos: React.FC = () => {
           <DialogActions>
             <Button onClick={() => setCcModalOpen(false)}>Cancelar</Button>
             <Button type="submit" variant="contained" color="primary">Salvar</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* MODAL DE SUPLEMENTAÇÃO ORÇAMENTÁRIA (APORTE DA DIRETORIA) */}
+      <Dialog
+        open={supplementModalOpen}
+        onClose={() => setSupplementModalOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <form onSubmit={handleSupplementSubmit}>
+          <DialogTitle className="border-b border-slate-200 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-xl bg-blue-600 text-white">
+                <DollarSign className="w-5 h-5" />
+              </div>
+              <div>
+                <Typography variant="h6" className="font-extrabold text-base">
+                  Aporte / Suplementação Orçamentária
+                </Typography>
+                <Typography variant="caption" className="text-slate-500">
+                  Alçada Exclusiva da Diretoria & Usuário Master
+                </Typography>
+              </div>
+            </div>
+          </DialogTitle>
+
+          <DialogContent dividers className="space-y-4">
+            {supplementError && (
+              <Alert severity="error" className="rounded-xl">
+                {supplementError}
+              </Alert>
+            )}
+
+            <FormControl fullWidth required>
+              <InputLabel>Centro de Custo Favorecido</InputLabel>
+              <Select
+                value={supplementCcId}
+                onChange={(e) => setSupplementCcId(e.target.value)}
+                label="Centro de Custo Favorecido"
+              >
+                {state.costCenters.map(cc => {
+                  const comp = comparisons.find(c => c.costCenter.id === cc.id);
+                  return (
+                    <MenuItem key={cc.id} value={cc.id}>
+                      {cc.code} - {cc.name} ({cc.branch}) | Teto Atual: R$ {cc.budget.toLocaleString('pt-BR')} {comp && comp.totalPurchased > cc.budget ? '⚠️ [EXCEDIDO]' : ''}
+                    </MenuItem>
+                  );
+                })}
+              </Select>
+            </FormControl>
+
+            <TextField
+              fullWidth
+              type="number"
+              label="Valor Adicional do Aporte (R$)"
+              value={supplementAmount}
+              onChange={(e) => setSupplementAmount(Math.max(1, Number(e.target.value)))}
+              required
+              helperText="Este valor será somado imediatamente ao teto orçamentário provisionado."
+            />
+
+            <TextField
+              fullWidth
+              multiline
+              rows={3}
+              label="Justificativa Formal da Diretoria"
+              placeholder="Ex: Suplementação aprovada pelo comitê de diretoria para atender demanda extraordinária de insumos no período."
+              value={supplementReason}
+              onChange={(e) => setSupplementReason(e.target.value)}
+              required
+              helperText="Obrigatório para registro permanente na trilha de auditoria e conformidade fiscal."
+            />
+          </DialogContent>
+
+          <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+            <Button onClick={() => setSupplementModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" variant="contained" color="primary" className="font-bold">
+              Confirmar Suplementação
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* MODAL DE REMANEJAMENTO ENTRE CENTROS DE CUSTO */}
+      <Dialog
+        open={transferModalOpen}
+        onClose={() => setTransferModalOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <form onSubmit={handleTransferSubmit}>
+          <DialogTitle className="border-b border-slate-200 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-xl bg-indigo-600 text-white">
+                <ArrowRightLeft className="w-5 h-5" />
+              </div>
+              <div>
+                <Typography variant="h6" className="font-extrabold text-base">
+                  Remanejamento de Orçamento entre Setores
+                </Typography>
+                <Typography variant="caption" className="text-slate-500">
+                  Transferência de dotação de um CC com superávit para um CC deficitário
+                </Typography>
+              </div>
+            </div>
+          </DialogTitle>
+
+          <DialogContent dividers className="space-y-4">
+            {transferError && (
+              <Alert severity="error" className="rounded-xl">
+                {transferError}
+              </Alert>
+            )}
+
+            <FormControl fullWidth required>
+              <InputLabel>Centro de Custo de Origem (Cedente)</InputLabel>
+              <Select
+                value={transferFromCcId}
+                onChange={(e) => setTransferFromCcId(e.target.value)}
+                label="Centro de Custo de Origem (Cedente)"
+              >
+                {state.costCenters.map(cc => {
+                  const comp = comparisons.find(c => c.costCenter.id === cc.id);
+                  const free = comp ? comp.remainingBudget : cc.budget;
+                  return (
+                    <MenuItem key={cc.id} value={cc.id} disabled={cc.id === transferToCcId}>
+                      {cc.code} - {cc.name} ({cc.branch}) | Saldo Livre: R$ {free.toLocaleString('pt-BR')}
+                    </MenuItem>
+                  );
+                })}
+              </Select>
+            </FormControl>
+
+            <FormControl fullWidth required>
+              <InputLabel>Centro de Custo de Destino (Recebedor)</InputLabel>
+              <Select
+                value={transferToCcId}
+                onChange={(e) => setTransferToCcId(e.target.value)}
+                label="Centro de Custo de Destino (Recebedor)"
+              >
+                {state.costCenters.map(cc => (
+                  <MenuItem key={cc.id} value={cc.id} disabled={cc.id === transferFromCcId}>
+                    {cc.code} - {cc.name} ({cc.branch}) | Teto Atual: R$ {cc.budget.toLocaleString('pt-BR')}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            <TextField
+              fullWidth
+              type="number"
+              label="Valor a Transferir (R$)"
+              value={transferAmount}
+              onChange={(e) => setTransferAmount(Math.max(1, Number(e.target.value)))}
+              required
+            />
+
+            <TextField
+              fullWidth
+              multiline
+              rows={3}
+              label="Justificativa Corporativa do Remanejamento"
+              placeholder="Ex: Realocação de saldo orçamentário excedente da Manutenção para Operações devido a pico de demanda."
+              value={transferReason}
+              onChange={(e) => setTransferReason(e.target.value)}
+              required
+              helperText="Exige justificativa detalhada para efeito contábil e prestação de contas."
+            />
+          </DialogContent>
+
+          <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+            <Button onClick={() => setTransferModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" variant="contained" color="secondary" className="font-bold">
+              Executar Transferência
+            </Button>
           </DialogActions>
         </form>
       </Dialog>

@@ -46,7 +46,7 @@ const AppContent: React.FC = () => {
       case 'inventario':
         return <Inventario />;
       case 'centro-custos':
-        return <CentroDeCustos />;
+        return <CentroDeCustos onNavigate={(tab) => setCurrentTab(tab)} />;
       case 'unidades':
         return <Unidades />;
       case 'relatorios':

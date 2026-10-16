@@ -2,14 +2,15 @@ import {
   Product, Movement, Transfer, Requisition, PurchaseRequest, PurchaseRequestItem, PurchaseOrder, PurchaseOrderItem,
   Asset, AssetCustodyRecord, InventoryAudit, CostCenter, AuditLog, SystemNotification, 
   SystemSettings, User, Branch, UserRole, BranchInfo, CostCenterComparison, CostCenterProductBalance,
-  BackupScope, BackupFrequency, BackupRoutineConfig, BackupMetricsSummary, BackupSnapshot
+  BackupScope, BackupFrequency, BackupRoutineConfig, BackupMetricsSummary, BackupSnapshot,
+  CostCenterBudgetPolicy, BudgetOverrunPolicyMode, BudgetCalculationBasis, CostCenterBudgetCheckResult
 } from '../types';
 
 import { 
   INITIAL_PRODUCTS, INITIAL_USERS, INITIAL_COST_CENTERS, 
   INITIAL_TRANSFERS, INITIAL_REQUISITIONS, INITIAL_PURCHASE_REQUESTS, INITIAL_PURCHASE_ORDERS, 
   INITIAL_ASSETS, INITIAL_INVENTORIES, INITIAL_AUDIT_LOGS, 
-  INITIAL_NOTIFICATIONS, INITIAL_SETTINGS, INITIAL_BRANCHES 
+  INITIAL_NOTIFICATIONS, INITIAL_SETTINGS, INITIAL_BRANCHES, DEFAULT_BUDGET_POLICY
 } from '../data/seedData';
 
 const STORAGE_KEY = 'almoxplus_data_v2';
@@ -159,6 +160,11 @@ class DataService {
               parsed.users.push(seedUser);
             }
           }
+        }
+        if (!parsed.settings) {
+          parsed.settings = INITIAL_SETTINGS;
+        } else if (!parsed.settings.budgetPolicy) {
+          parsed.settings.budgetPolicy = DEFAULT_BUDGET_POLICY;
         }
         return parsed;
       }
@@ -856,6 +862,23 @@ class DataService {
       };
     });
 
+    let budgetOverrun = false;
+    let budgetOverrunAmount = 0;
+
+    if (costCenter?.id) {
+      const estimatedTotal = requestItems.reduce((acc, it) => acc + (it.quantity * (it.estimatedUnitPrice || 0)), 0);
+      const budgetCheck = this.checkCostCenterBudget(costCenter.id, estimatedTotal);
+
+      if (!budgetCheck.allowed) {
+        throw new Error(budgetCheck.errorMessage || 'Operação bloqueada por estouro de verba do centro de custo.');
+      }
+
+      if (budgetCheck.isOverBudget) {
+        budgetOverrun = true;
+        budgetOverrunAmount = budgetCheck.overrunAmount;
+      }
+    }
+
     const request: PurchaseRequest = {
       id: `sc-${Date.now()}`,
       code: `SC-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
@@ -869,7 +892,9 @@ class DataService {
       justification,
       items: requestItems,
       status: 'PENDENTE',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      budgetOverrun,
+      budgetOverrunAmount: budgetOverrun ? budgetOverrunAmount : undefined
     };
 
     if (!this.state.purchaseRequests) {
@@ -882,16 +907,18 @@ class DataService {
       currentUser,
       'COMPRAR',
       'Compras',
-      `Nova Solicitação de Compra ${request.code} criada com ${request.items.length} item(ns).`,
+      `Nova Solicitação de Compra ${request.code} criada com ${request.items.length} item(ns)${budgetOverrun ? ` [ALERTA: Estouro Orçamentário de R$ ${budgetOverrunAmount.toFixed(2)}]` : ''}.`,
       null,
       JSON.stringify(request),
       branch
     );
 
     this.notify(
-      'Nova Solicitação de Compra (SC)',
-      `Solicitação ${request.code} emitida por ${currentUser.name} (${request.items.length} item(ns)) para ${branch}.`,
-      'INFO',
+      budgetOverrun ? 'SC Retida - Alçada Orçamentária Requerida (Opção 3)' : 'Nova Solicitação de Compra (SC)',
+      budgetOverrun
+        ? `Solicitação ${request.code} (${branch}) excede o orçamento do Centro de Custo ${costCenter?.name} em R$ ${budgetOverrunAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}. Requer aprovação extraordinária da Diretoria.`
+        : `Solicitação ${request.code} emitida por ${currentUser.name} (${request.items.length} item(ns)) para ${branch}.`,
+      budgetOverrun ? 'WARNING' : 'INFO',
       branch,
       'Compras'
     );
@@ -1122,6 +1149,22 @@ class DataService {
 
     const totalVal = items.reduce((sum, i) => sum + (i.quantity * i.unitPrice), 0);
 
+    let budgetOverrun = false;
+    let budgetOverrunAmount = 0;
+
+    if (costCenterId) {
+      const budgetCheck = this.checkCostCenterBudget(costCenterId, totalVal);
+
+      if (!budgetCheck.allowed) {
+        throw new Error(budgetCheck.errorMessage || 'Operação bloqueada por estouro de verba do centro de custo.');
+      }
+
+      if (budgetCheck.isOverBudget) {
+        budgetOverrun = true;
+        budgetOverrunAmount = budgetCheck.overrunAmount;
+      }
+    }
+
     const po: PurchaseOrder = {
       id: `po-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       code: `OC-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
@@ -1137,7 +1180,9 @@ class DataService {
       createdAt: new Date().toISOString(),
       paymentTerms,
       purchaseRequestId,
-      purchaseRequestCode
+      purchaseRequestCode,
+      budgetOverrun,
+      budgetOverrunAmount: budgetOverrun ? budgetOverrunAmount : undefined
     };
 
     this.state.purchaseOrders.unshift(po);
@@ -1146,16 +1191,18 @@ class DataService {
       currentUser,
       'COMPRAR',
       'Compras',
-      `Nova Ordem de Compra ${po.code} emitida para ${supplierName} (Total: R$ ${totalVal.toFixed(2)})${purchaseRequestCode ? ` originada da SC ${purchaseRequestCode}` : ''}.`,
+      `Nova Ordem de Compra ${po.code} emitida para ${supplierName} (Total: R$ ${totalVal.toFixed(2)})${purchaseRequestCode ? ` originada da SC ${purchaseRequestCode}` : ''}${budgetOverrun ? ` [ALERTA: Estouro Orçamentário de R$ ${budgetOverrunAmount.toFixed(2)}]` : ''}.`,
       null,
       JSON.stringify(po),
       branch
     );
 
     this.notify(
-      'Ordem de Compra Emitida',
-      `OC ${po.code} criada no valor de R$ ${totalVal.toLocaleString('pt-BR')} para a unidade ${branch}.`,
-      'INFO',
+      budgetOverrun ? 'OC com Estouro de Verba - Alçada da Diretoria (Opção 3)' : 'Ordem de Compra Emitida',
+      budgetOverrun
+        ? `OC ${po.code} emitida com excedente orçamentário de R$ ${budgetOverrunAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} no Centro de Custo ${costCenterName || ''}. Requer aprovação extraordinária da Diretoria.`
+        : `OC ${po.code} criada no valor de R$ ${totalVal.toLocaleString('pt-BR')} para a unidade ${branch}.`,
+      budgetOverrun ? 'WARNING' : 'INFO',
       branch,
       'Compras'
     );
@@ -1167,7 +1214,8 @@ class DataService {
   public updatePurchaseOrderStatus(
     poId: string,
     status: PurchaseOrder['status'],
-    currentUser: User
+    currentUser: User,
+    overrunJustification?: string
   ): PurchaseOrder {
     if (currentUser.role === 'Visitante') {
       throw new Error('Perfil Visitante não possui permissão para alterar compras.');
@@ -1177,6 +1225,23 @@ class DataService {
     if (!po) throw new Error('Ordem de compra não encontrada.');
 
     const prevStatus = po.status;
+
+    if (status === 'APROVADO' && po.budgetOverrun) {
+      const policy = this.getBudgetPolicy();
+      const isAuthorized = policy.allowedApproverRoles.includes(currentUser.role) || currentUser.role === 'Master';
+      if (!isAuthorized) {
+        throw new Error(`🔒 Alçada Restrita: Esta Ordem de Compra possui excedente orçamentário de R$ ${po.budgetOverrunAmount?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} no Centro de Custo. Pela política corporativa vigente (Opção 3: Alçada Extraordinária), a liberação é restrita a usuários com perfil ${policy.allowedApproverRoles.join(' ou ')}.`);
+      }
+      if (policy.requireJustification && (!overrunJustification || overrunJustification.trim().length < 5)) {
+        throw new Error('É obrigatório fornecer a justificativa da diretoria para autorizar a compra com estouro orçamentário.');
+      }
+      po.budgetOverrunApprovedBy = currentUser.name;
+      po.budgetOverrunApprovedAt = new Date().toISOString();
+      if (overrunJustification) {
+        po.budgetOverrunJustification = overrunJustification;
+      }
+    }
+
     po.status = status;
 
     if (status === 'APROVADO') {
@@ -2706,6 +2771,281 @@ class DataService {
 
   public getCostCenterComparisons(selectedBranch?: string): CostCenterComparison[] {
     return this.getAllCostCentersComparison(selectedBranch);
+  }
+
+  // --- CONFIGURAÇÕES GLOBAIS E GOVERNANÇA ORÇAMENTÁRIA ---
+  public getSettings(): SystemSettings {
+    if (!this.state.settings) {
+      this.state.settings = { ...INITIAL_SETTINGS };
+    }
+    if (!this.state.settings.budgetPolicy) {
+      this.state.settings.budgetPolicy = { ...DEFAULT_BUDGET_POLICY };
+    }
+    return this.state.settings;
+  }
+
+  public updateSettings(newSettings: Partial<SystemSettings>, currentUser: User): SystemSettings {
+    const current = this.getSettings();
+    this.state.settings = {
+      ...current,
+      ...newSettings
+    };
+    this.logAudit(
+      currentUser,
+      'CONFIGURACAO',
+      'Configurações',
+      'Parâmetros globais do sistema atualizados com sucesso.',
+      null,
+      JSON.stringify(newSettings),
+      currentUser.branch || 'GLOBAL'
+    );
+    this.saveState();
+    return this.state.settings;
+  }
+
+  public getBudgetPolicy(): CostCenterBudgetPolicy {
+    const settings = this.getSettings();
+    if (!settings.budgetPolicy) {
+      settings.budgetPolicy = { ...DEFAULT_BUDGET_POLICY };
+      this.saveState();
+    }
+    return settings.budgetPolicy;
+  }
+
+  public updateBudgetPolicy(
+    newPolicy: Partial<CostCenterBudgetPolicy>,
+    currentUser: User,
+    changeReason?: string
+  ): CostCenterBudgetPolicy {
+    if (currentUser.role !== 'Master' && currentUser.role !== 'Gestor') {
+      throw new Error('Apenas usuários com perfil Master ou Gestor podem alterar a política de governança orçamentária.');
+    }
+
+    const currentPolicy = this.getBudgetPolicy();
+    const updated: CostCenterBudgetPolicy = {
+      ...currentPolicy,
+      ...newPolicy,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser.name,
+      updatedByEmail: currentUser.email,
+      changeReason: changeReason || newPolicy.changeReason || 'Alteração de política orçamentária pelo painel corporativo.'
+    };
+
+    this.state.settings.budgetPolicy = updated;
+
+    this.logAudit(
+      currentUser,
+      'CONFIGURACAO',
+      'Governança Orçamentária',
+      `Política de estouro de centros de custo atualizada para o modo: ${updated.mode} (Tolerância: ${updated.tolerancePercentage}%, Base: ${updated.calculationBasis}). Justificativa: ${updated.changeReason}`,
+      JSON.stringify(currentPolicy),
+      JSON.stringify(updated),
+      'GLOBAL'
+    );
+
+    this.notify(
+      'Política Orçamentária Atualizada',
+      `A regra de estouro de centros de custo foi alterada para "${updated.mode}" por ${currentUser.name}.`,
+      'INFO',
+      'GLOBAL',
+      'Configuracoes'
+    );
+
+    this.saveState();
+    return updated;
+  }
+
+  public checkCostCenterBudget(
+    costCenterId: string,
+    additionalAmount: number
+  ): CostCenterBudgetCheckResult {
+    const policy = this.getBudgetPolicy();
+    const comparison = this.getCostCenterComparison(costCenterId);
+
+    if (!comparison) {
+      return {
+        allowed: true,
+        isOverBudget: false,
+        overrunAmount: 0,
+        overrunPercentage: 0,
+        budget: 0,
+        currentUsed: 0,
+        projectedUsed: additionalAmount,
+        remainingBudget: 0,
+        policyMode: policy.mode,
+        requiresSpecialApproval: false,
+        costCenterName: 'Não vinculado',
+        costCenterCode: 'N/A'
+      };
+    }
+
+    const { budget, totalPurchased, totalDelivered } = comparison;
+
+    let currentUsed = 0;
+    if (policy.calculationBasis === 'COMPROMETIDO') {
+      currentUsed = totalPurchased;
+    } else if (policy.calculationBasis === 'CONSUMO_REAL') {
+      currentUsed = totalDelivered;
+    } else {
+      currentUsed = Math.max(totalPurchased, totalDelivered);
+    }
+
+    const projectedUsed = currentUsed + additionalAmount;
+    const toleranceFactor = 1 + (Math.max(0, policy.tolerancePercentage || 0) / 100);
+    const effectiveLimit = budget * toleranceFactor;
+    const isOverBudget = projectedUsed > effectiveLimit;
+    const overrunAmount = Math.max(0, projectedUsed - budget);
+    const overrunPercentage = budget > 0 ? (overrunAmount / budget) * 100 : (projectedUsed > 0 ? 100 : 0);
+    const remainingBudget = Math.max(0, budget - currentUsed);
+
+    let allowed = true;
+    let requiresSpecialApproval = false;
+    let warningMessage: string | undefined;
+    let errorMessage: string | undefined;
+
+    if (isOverBudget) {
+      switch (policy.mode) {
+        case 'BLOQUEIO_RIGIDO': // Opção 1: Hard Stop
+          allowed = false;
+          requiresSpecialApproval = false;
+          errorMessage = `Bloqueio Orçamentário Rígido (Opção 1): O Centro de Custo ${comparison.costCenter.code} - ${comparison.costCenter.name} possui teto aprovado de R$ ${budget.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}, com R$ ${currentUsed.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} já utilizados. Esta despesa de R$ ${additionalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} excede o teto em R$ ${overrunAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}. Conforme política da diretoria, novos pedidos estão bloqueados até suplementação de verba.`;
+          break;
+
+        case 'INFORMATIVO_AVISO': // Opção 2: Apenas Aviso
+          allowed = true;
+          requiresSpecialApproval = false;
+          warningMessage = `Alerta Informativo (Opção 2): Esta operação faz o Centro de Custo ${comparison.costCenter.code} exceder a verba provisionada em R$ ${overrunAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${overrunPercentage.toFixed(1)}% acima do teto). Prosseguimento autorizado sem bloqueio.`;
+          break;
+
+        case 'ALCADA_DIRETORIA_MASTER': // Opção 3: Bloqueio Condicional com Alçada (Vigente)
+          allowed = true;
+          requiresSpecialApproval = true;
+          warningMessage = `Alçada da Diretoria / Master Requerida (Opção 3): Esta compra ultrapassa o orçamento provisionado do Centro de Custo ${comparison.costCenter.code} em R$ ${overrunAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}. Pela política corporativa vigente, o pedido ficará retido aguardando liberação formal da Diretoria / Usuário Master com justificativa.`;
+          break;
+
+        case 'TOLERANCIA_PERCENTUAL': // Opção 4: Tolerância Parametrizada
+          allowed = true;
+          requiresSpecialApproval = true;
+          warningMessage = `Tolerância Excedida (Opção 4): O Centro de Custo ultrapassou o teto e a margem de tolerância corporativa de ${policy.tolerancePercentage}%. Excedente total: R$ ${overrunAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}. Requer autorização da Diretoria / Usuário Master.`;
+          break;
+      }
+    }
+
+    return {
+      allowed,
+      isOverBudget,
+      overrunAmount,
+      overrunPercentage,
+      budget,
+      currentUsed,
+      projectedUsed,
+      remainingBudget,
+      policyMode: policy.mode,
+      requiresSpecialApproval,
+      warningMessage,
+      errorMessage,
+      costCenterName: comparison.costCenter.name,
+      costCenterCode: comparison.costCenter.code
+    };
+  }
+
+  public supplementCostCenterBudget(
+    costCenterId: string,
+    additionalAmount: number,
+    justification: string,
+    currentUser: User
+  ): CostCenter {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Somente o Usuário Master ou Diretoria possui alçada para suplementar verba de Centro de Custo.');
+    }
+    if (additionalAmount <= 0) {
+      throw new Error('O valor de suplementação deve ser superior a zero.');
+    }
+    if (!justification || justification.trim().length < 5) {
+      throw new Error('É obrigatório fornecer justificativa formal para a suplementação orçamentária.');
+    }
+
+    const cc = this.state.costCenters.find(c => c.id === costCenterId);
+    if (!cc) throw new Error('Centro de custo não encontrado.');
+
+    const previousBudget = cc.budget;
+    cc.budget += Number(additionalAmount);
+
+    this.logAudit(
+      currentUser,
+      'ALTERAR',
+      'Centro de Custos',
+      `Suplementação Orçamentária no Centro de Custo ${cc.code} (${cc.name}) no valor de R$ ${Number(additionalAmount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}. Justificativa: ${justification}`,
+      `R$ ${previousBudget.toFixed(2)}`,
+      `R$ ${cc.budget.toFixed(2)}`,
+      cc.branch
+    );
+
+    this.notify(
+      'Suplementação Orçamentária Aprovada',
+      `A Diretoria aportou R$ ${Number(additionalAmount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} no CC ${cc.code} (${cc.name}). Novo teto: R$ ${cc.budget.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`,
+      'SUCCESS',
+      cc.branch,
+      'CentroDeCustos'
+    );
+
+    this.saveState();
+    return cc;
+  }
+
+  public transferCostCenterBudget(
+    fromCostCenterId: string,
+    toCostCenterId: string,
+    amount: number,
+    justification: string,
+    currentUser: User
+  ): { from: CostCenter; to: CostCenter } {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Somente o Usuário Master ou Diretoria pode autorizar remanejamento entre Centros de Custo.');
+    }
+    if (fromCostCenterId === toCostCenterId) {
+      throw new Error('Selecione centros de custo distintos para transferência de saldo.');
+    }
+    if (amount <= 0) {
+      throw new Error('O valor de transferência deve ser maior que zero.');
+    }
+    if (!justification || justification.trim().length < 5) {
+      throw new Error('Forneça uma justificativa detalhada para o remanejamento orçamentário.');
+    }
+
+    const fromCC = this.state.costCenters.find(c => c.id === fromCostCenterId);
+    const toCC = this.state.costCenters.find(c => c.id === toCostCenterId);
+    if (!fromCC || !toCC) throw new Error('Centros de custo informados não foram localizados.');
+
+    const compFrom = this.getCostCenterComparison(fromCC.id);
+    const availableInFrom = compFrom ? compFrom.remainingBudget : fromCC.budget;
+    if (amount > availableInFrom) {
+      throw new Error(`Saldo livre insuficiente no Centro de Custo de origem (${fromCC.code}). Saldo disponível: R$ ${availableInFrom.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`);
+    }
+
+    fromCC.budget -= Number(amount);
+    toCC.budget += Number(amount);
+
+    this.logAudit(
+      currentUser,
+      'TRANSFERIR',
+      'Centro de Custos',
+      `Remanejamento Orçamentário de R$ ${Number(amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de ${fromCC.code} para ${toCC.code}. Justificativa: ${justification}`,
+      `${fromCC.code}: R$ ${(fromCC.budget + amount).toFixed(2)} | ${toCC.code}: R$ ${(toCC.budget - amount).toFixed(2)}`,
+      `${fromCC.code}: R$ ${fromCC.budget.toFixed(2)} | ${toCC.code}: R$ ${toCC.budget.toFixed(2)}`,
+      'GLOBAL'
+    );
+
+    this.notify(
+      'Remanejamento Orçamentário Realizado',
+      `Transferência de R$ ${Number(amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de ${fromCC.code} para ${toCC.code} autorizada pela Diretoria.`,
+      'INFO',
+      'GLOBAL',
+      'CentroDeCustos'
+    );
+
+    this.saveState();
+    return { from: fromCC, to: toCC };
   }
 }
 

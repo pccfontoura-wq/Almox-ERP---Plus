@@ -1,4 +1,4 @@
-import { Product, User, CostCenter, Asset, Requisition, PurchaseRequest, PurchaseOrder, Transfer, InventoryAudit, AuditLog, SystemNotification, SystemSettings, BranchInfo } from '../types';
+import { Product, User, CostCenter, Asset, Requisition, PurchaseRequest, PurchaseOrder, Transfer, InventoryAudit, AuditLog, SystemNotification, SystemSettings, BranchInfo, CostCenterBudgetPolicy } from '../types';
 
 export const INITIAL_BRANCHES: BranchInfo[] = [
   {
@@ -1004,6 +1004,21 @@ export const INITIAL_NOTIFICATIONS: SystemNotification[] = [
   }
 ];
 
+export const DEFAULT_BUDGET_POLICY: CostCenterBudgetPolicy = {
+  mode: 'ALCADA_DIRETORIA_MASTER', // Opção 3: Ativa conforme diretriz corporativa
+  calculationBasis: 'COMPROMETIDO',
+  tolerancePercentage: 0,
+  requireJustification: true,
+  allowMasterOverride: true,
+  allowedApproverRoles: ['Master'],
+  notifyFinanceOnOverrun: true,
+  preventRequisitionExceeding: true,
+  updatedAt: new Date().toISOString(),
+  updatedBy: 'Diretoria Corporativa (Master)',
+  updatedByEmail: 'diretoria@almoxplus.com.br',
+  changeReason: 'Definição da Política de Alçada da Diretoria (Opção 3) como padrão do ERP.'
+};
+
 export const INITIAL_SETTINGS: SystemSettings = {
   companyName: 'Almox Plus Tecnologia e Logística S.A.',
   cnpj: '10.987.654/0001-32',
@@ -1012,5 +1027,6 @@ export const INITIAL_SETTINGS: SystemSettings = {
   expirationDaysWarning: 30,
   requireTransferApproval: true,
   emailNotificationsEnabled: true,
-  backupIntervalDays: 7
+  backupIntervalDays: 7,
+  budgetPolicy: DEFAULT_BUDGET_POLICY
 };

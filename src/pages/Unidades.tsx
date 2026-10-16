@@ -14,6 +14,7 @@ import { dataService } from '../services/dataService';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { BranchInfo, UnitType } from '../types';
+import { copyToClipboard } from '../utils/clipboard';
 
 const BRAZIL_STATES = [
   'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO',
@@ -287,7 +288,7 @@ export const Unidades: React.FC<UnidadesProps> = ({ embedded = false }) => {
     }
   };
 
-  const handleCopyBillingData = (unit: BranchInfo) => {
+  const handleCopyBillingData = async (unit: BranchInfo) => {
     const fullAddress = [
       unit.street ? `${unit.street}${unit.number ? `, ${unit.number}` : ''}` : unit.address,
       unit.complement,
@@ -308,7 +309,11 @@ export const Unidades: React.FC<UnidadesProps> = ({ embedded = false }) => {
       `Telefone: ${unit.phone || '-'} | E-mail NF-e: ${unit.email || '-'}`
     ].join('\n');
 
-    navigator.clipboard.writeText(text);
+    try {
+      await copyToClipboard(text);
+    } catch {
+      // Handled gracefully
+    }
     setToastMessage(`Dados de faturamento e endereço da Unidade ${unit.code} copiados para a área de transferência!`);
   };
 

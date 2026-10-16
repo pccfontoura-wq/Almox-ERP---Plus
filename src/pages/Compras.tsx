@@ -7,7 +7,8 @@ import {
 import {
   ShoppingCart, FileText, CheckCircle2, XCircle, Plus, Trash2,
   Building2, AlertCircle, ArrowRight, Clock, ExternalLink, Eye,
-  Check, X, Search, Layers, RefreshCw, Send, DollarSign
+  Check, X, Search, Layers, RefreshCw, Send, DollarSign,
+  ShieldAlert, Scale
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -109,8 +110,34 @@ export const Compras: React.FC = () => {
   });
   const [poFormError, setPoFormError] = useState<string | null>(null);
 
+  // Overrun Approval States (Política de Estouro Orçamentário - Opção 3)
+  const [overrunApprovalModalOpen, setOverrunApprovalModalOpen] = useState(false);
+  const [poToApproveOverrun, setPoToApproveOverrun] = useState<PurchaseOrder | null>(null);
+  const [overrunJustification, setOverrunJustification] = useState('');
+  const [overrunApprovalError, setOverrunApprovalError] = useState<string | null>(null);
+
   const state = dataService.getState();
   const canEdit = currentUser?.role !== 'Visitante';
+
+  // Verificação Orçamentária em Tempo Real para Formulário de SC
+  const requestEstimatedTotal = useMemo(() => {
+    return requestItems.reduce((acc, it) => acc + (it.quantity * (it.estimatedUnitPrice || 0)), 0);
+  }, [requestItems]);
+
+  const requestBudgetCheck = useMemo(() => {
+    if (!newRequestCostCenter) return null;
+    return dataService.checkCostCenterBudget(newRequestCostCenter, requestEstimatedTotal);
+  }, [newRequestCostCenter, requestEstimatedTotal, state]);
+
+  // Verificação Orçamentária em Tempo Real para Formulário de OC Direta
+  const poTotalEstimated = useMemo(() => {
+    return Number(poForm.quantity || 0) * Number(poForm.unitPrice || 0);
+  }, [poForm.quantity, poForm.unitPrice]);
+
+  const directPoBudgetCheck = useMemo(() => {
+    if (!poForm.costCenterId) return null;
+    return dataService.checkCostCenterBudget(poForm.costCenterId, poTotalEstimated);
+  }, [poForm.costCenterId, poTotalEstimated, state]);
 
   // Filtered lists
   const purchaseRequests = useMemo(() => {
@@ -429,6 +456,22 @@ export const Compras: React.FC = () => {
   // --- PURCHASE ORDERS (OC) TABLE & PIPELINE ---
   const handleUpdatePoStatus = (poId: string, status: PurchaseOrderStatus) => {
     if (!currentUser) return;
+    const po = state.purchaseOrders.find(p => p.id === poId);
+    if (!po) return;
+
+    // Se estiver aprovando uma ordem com estouro orçamentário
+    if (status === 'APROVADO' && po.budgetOverrun) {
+      if (currentUser.role !== 'Master') {
+        alert(`🔒 Alçada Restrita: Esta Ordem de Compra possui excedente orçamentário de R$ ${po.budgetOverrunAmount?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} no Centro de Custo. Pela política corporativa vigente (Opção 3: Alçada Extraordinária), a liberação é restrita a usuários com perfil Master / Diretoria.`);
+        return;
+      }
+      setPoToApproveOverrun(po);
+      setOverrunJustification('');
+      setOverrunApprovalError(null);
+      setOverrunApprovalModalOpen(true);
+      return;
+    }
+
     try {
       dataService.updatePurchaseOrderStatus(poId, status, currentUser);
       refreshData();
@@ -438,6 +481,32 @@ export const Compras: React.FC = () => {
       }
     } catch (e: any) {
       alert(e.message);
+    }
+  };
+
+  const handleConfirmOverrunApproval = () => {
+    if (!currentUser || !poToApproveOverrun) return;
+    if (!overrunJustification.trim() || overrunJustification.trim().length < 5) {
+      setOverrunApprovalError('É obrigatório preencher a justificativa da diretoria (mínimo 5 caracteres) para autorizar a compra com estouro orçamentário.');
+      return;
+    }
+
+    try {
+      dataService.updatePurchaseOrderStatus(
+        poToApproveOverrun.id,
+        'APROVADO',
+        currentUser,
+        overrunJustification.trim()
+      );
+      setOverrunApprovalModalOpen(false);
+      setPoToApproveOverrun(null);
+      refreshData();
+      if (selectedPo?.id === poToApproveOverrun.id) {
+        const updated = dataService.getState().purchaseOrders.find(p => p.id === poToApproveOverrun.id);
+        setSelectedPo(updated || null);
+      }
+    } catch (e: any) {
+      setOverrunApprovalError(e.message || 'Erro ao aprovar compra.');
     }
   };
 
@@ -601,7 +670,18 @@ export const Compras: React.FC = () => {
       id: 'status',
       label: 'Status da Solicitação',
       accessor: (r) => r.status,
-      render: (r) => getRequestStatusChip(r.status)
+      render: (r) => (
+        <div className="flex flex-col gap-1 items-start">
+          {getRequestStatusChip(r.status)}
+          {r.budgetOverrun && (
+            <Chip
+              label={`⚠️ Alçada Diretoria (Excedente R$ ${r.budgetOverrunAmount ? r.budgetOverrunAmount.toLocaleString('pt-BR') : '0'})`}
+              size="small"
+              className="text-[10px] h-5 font-bold bg-amber-100 text-amber-900 border border-amber-300 dark:bg-amber-950 dark:text-amber-200"
+            />
+          )}
+        </div>
+      )
     },
     {
       id: 'createdAt',
@@ -707,7 +787,18 @@ export const Compras: React.FC = () => {
       render: (po) => {
         const displayLabel = getPoStatusLabel(po.status);
         const color = po.status === 'ENTREGUE' ? 'success' : po.status === 'APROVADO' ? 'info' : po.status === 'CANCELADO' ? 'error' : 'warning';
-        return <Chip label={displayLabel} color={color} size="small" className="font-bold text-[11px] h-5" />;
+        return (
+          <div className="flex flex-col gap-1 items-start">
+            <Chip label={displayLabel} color={color} size="small" className="font-bold text-[11px] h-5" />
+            {po.budgetOverrun && (
+              <Chip
+                label={`⚠️ Alçada Diretoria (Excedente R$ ${po.budgetOverrunAmount ? po.budgetOverrunAmount.toLocaleString('pt-BR') : '0'})`}
+                size="small"
+                className="text-[10px] h-5 font-bold bg-amber-100 text-amber-900 border border-amber-300 dark:bg-amber-950 dark:text-amber-200"
+              />
+            )}
+          </div>
+        );
       }
     },
     { id: 'createdAt', label: 'Data Emissão', accessor: (po) => new Date(po.createdAt).toLocaleDateString('pt-BR') },
@@ -731,8 +822,14 @@ export const Compras: React.FC = () => {
               Ver
             </Button>
             {po.status === 'AGUARDANDO_APROVACAO' && (
-              <Button size="small" variant="contained" color="info" onClick={() => handleUpdatePoStatus(po.id, 'APROVADO')} className="text-[10px] py-0.5 px-2 font-bold">
-                Aprovar
+              <Button
+                size="small"
+                variant="contained"
+                color={po.budgetOverrun ? 'warning' : 'info'}
+                onClick={() => handleUpdatePoStatus(po.id, 'APROVADO')}
+                className="text-[10px] py-0.5 px-2 font-bold"
+              >
+                {po.budgetOverrun ? 'Liberar (Diretoria)' : 'Aprovar'}
               </Button>
             )}
             {po.status === 'APROVADO' && (
@@ -1023,6 +1120,37 @@ export const Compras: React.FC = () => {
                 />
               </div>
             </div>
+
+            {/* AVISO EM TEMPO REAL DE ORÇAMENTO / POLÍTICA OPÇÃO 3 */}
+            {requestBudgetCheck && (
+              <div className={`p-3.5 rounded-xl border text-xs ${
+                requestBudgetCheck.isOverBudget
+                  ? 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40'
+                  : 'border-emerald-200 dark:border-emerald-900 bg-emerald-50/50 dark:bg-emerald-950/20'
+              }`}>
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-1.5">
+                  <div className="flex items-center gap-1.5 font-bold text-slate-800 dark:text-slate-100">
+                    <Scale className="w-4 h-4 text-blue-600" />
+                    <span>Orçamento do Centro de Custo: {requestBudgetCheck.costCenterCode} - {requestBudgetCheck.costCenterName}</span>
+                  </div>
+                  <Chip
+                    label={requestBudgetCheck.isOverBudget ? `Excedente Estimado: R$ ${requestBudgetCheck.overrunAmount.toLocaleString('pt-BR')}` : `Saldo Livre: R$ ${requestBudgetCheck.remainingBudget.toLocaleString('pt-BR')}`}
+                    size="small"
+                    color={requestBudgetCheck.isOverBudget ? 'warning' : 'success'}
+                    className="font-bold text-[10px] h-5"
+                  />
+                </div>
+                {requestBudgetCheck.isOverBudget ? (
+                  <p className="text-amber-900 dark:text-amber-200 leading-relaxed">
+                    ⚠️ <strong>Alerta de Governança (Política Vigente: Opção 3):</strong> O valor estimado desta solicitação (R$ {requestEstimatedTotal.toLocaleString('pt-BR')}) excede o saldo livre do setor em <strong>R$ {requestBudgetCheck.overrunAmount.toLocaleString('pt-BR')}</strong>. O pedido entrará retido com o selo de Alçada da Diretoria e exigirá autorização formal do Usuário Master.
+                  </p>
+                ) : (
+                  <p className="text-emerald-800 dark:text-emerald-300 leading-relaxed">
+                    ✅ Pedido dentro do limite orçamentário provisionado. Saldo projetado após aquisição: R$ {(requestBudgetCheck.remainingBudget - requestEstimatedTotal).toLocaleString('pt-BR')}.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* SEÇÃO MULTI-ITEM */}
             <Box className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 bg-slate-50 dark:bg-slate-900/60 space-y-4">
@@ -1798,6 +1926,29 @@ export const Compras: React.FC = () => {
                 </div>
               </div>
 
+              {/* Alerta de Estouro Orçamentário / Alçada da Diretoria */}
+              {selectedPo.budgetOverrun && (
+                <div className="p-3.5 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-xs">
+                  <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-200 mb-1">
+                    <ShieldAlert className="w-4 h-4 text-amber-600" />
+                    Alçada Extraordinária da Diretoria (Política Vigente: Opção 3)
+                  </div>
+                  <div className="text-slate-700 dark:text-slate-300 leading-normal">
+                    Esta compra ultrapassou a dotação do Centro de Custo em <strong>R$ {selectedPo.budgetOverrunAmount ? selectedPo.budgetOverrunAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00'}</strong>.
+                    {selectedPo.budgetOverrunApprovedBy ? (
+                      <span className="block mt-1 text-emerald-700 dark:text-emerald-400 font-bold">
+                        ✅ Liberado por {selectedPo.budgetOverrunApprovedBy} em {selectedPo.budgetOverrunApprovedAt ? new Date(selectedPo.budgetOverrunApprovedAt).toLocaleDateString('pt-BR') : ''}.
+                        {selectedPo.budgetOverrunJustification && ` Motivo: "${selectedPo.budgetOverrunJustification}"`}
+                      </span>
+                    ) : (
+                      <span className="block mt-1 text-amber-800 dark:text-amber-300 font-semibold">
+                        🔒 Compra retida preventivamente. A aprovação exige perfil de Usuário Master / Diretoria com justificativa formal registrada.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Status Actions */}
               {canEdit && (
                 <Box className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between">
@@ -1809,11 +1960,11 @@ export const Compras: React.FC = () => {
                       <Button
                         size="small"
                         variant="contained"
-                        color="info"
+                        color={selectedPo.budgetOverrun ? 'warning' : 'info'}
                         onClick={() => handleUpdatePoStatus(selectedPo.id, 'APROVADO')}
                         className="font-bold text-xs"
                       >
-                        Aprovar Ordem
+                        {selectedPo.budgetOverrun ? 'Liberar com Alçada da Diretoria' : 'Aprovar Ordem'}
                       </Button>
                     )}
                     {selectedPo.status === 'APROVADO' && (

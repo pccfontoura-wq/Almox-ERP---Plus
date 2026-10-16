@@ -153,6 +153,11 @@ export interface Requisition {
   approvedAt?: string;
   rejectionReason?: string;
   fulfilledAt?: string;
+  budgetOverrun?: boolean;
+  budgetOverrunAmount?: number;
+  budgetOverrunJustification?: string;
+  budgetOverrunApprovedBy?: string;
+  budgetOverrunApprovedAt?: string;
 }
 
 export type PurchaseRequestItemStatus = 'PENDENTE' | 'APROVADO' | 'REJEITADO' | 'CANCELADO';
@@ -197,6 +202,11 @@ export interface PurchaseRequest {
   createdAt: string;
   updatedAt?: string;
   notes?: string;
+  budgetOverrun?: boolean;
+  budgetOverrunAmount?: number;
+  budgetOverrunJustification?: string;
+  budgetOverrunApprovedBy?: string;
+  budgetOverrunApprovedAt?: string;
 }
 
 export interface PurchaseOrderItem {
@@ -237,6 +247,11 @@ export interface PurchaseOrder {
   paymentTerms?: string;
   purchaseRequestId?: string;
   purchaseRequestCode?: string;
+  budgetOverrun?: boolean;
+  budgetOverrunAmount?: number;
+  budgetOverrunJustification?: string;
+  budgetOverrunApprovedBy?: string;
+  budgetOverrunApprovedAt?: string;
 }
 
 export interface CostCenterProductBalance {
@@ -378,6 +393,49 @@ export interface SystemNotification {
   linkModule?: string;
 }
 
+export type BudgetOverrunPolicyMode =
+  | 'ALCADA_DIRETORIA_MASTER' // Opção 3: Bloqueio Condicional com Alçada da Diretoria / Master (Padrão Ativo)
+  | 'BLOQUEIO_RIGIDO' // Opção 1: Hard Stop - Bloqueio Total sem exceções
+  | 'INFORMATIVO_AVISO' // Opção 2: Informativo com Alerta (Sem Bloqueio)
+  | 'TOLERANCIA_PERCENTUAL'; // Opção 4: Tolerância Percentual Parametrizada (Margem Flexível)
+
+export type BudgetCalculationBasis =
+  | 'COMPROMETIDO' // Base: Comprado (OCs emitidas + entregues)
+  | 'CONSUMO_REAL' // Base: Entregue (Consumo efetivo no Almoxarifado)
+  | 'AMBOS'; // Base: O mais restritivo entre Comprometido e Consumido
+
+export interface CostCenterBudgetPolicy {
+  mode: BudgetOverrunPolicyMode;
+  calculationBasis: BudgetCalculationBasis;
+  tolerancePercentage: number; // Ex: 0 (sem tolerância) ou 5, 10
+  requireJustification: boolean; // Exige justificativa formal de estouro
+  allowMasterOverride: boolean; // Usuário Master tem chave de alçada
+  allowedApproverRoles: UserRole[]; // Roles com alçada extraordinária: ['Master'] ou ['Master', 'Gestor']
+  notifyFinanceOnOverrun: boolean; // Notifica diretoria/financeiro automaticamente
+  preventRequisitionExceeding: boolean; // Aplica regra também a solicitações e requisições
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByEmail?: string;
+  changeReason?: string;
+}
+
+export interface CostCenterBudgetCheckResult {
+  allowed: boolean;
+  isOverBudget: boolean;
+  overrunAmount: number;
+  overrunPercentage: number;
+  budget: number;
+  currentUsed: number;
+  projectedUsed: number;
+  remainingBudget: number;
+  policyMode: BudgetOverrunPolicyMode;
+  requiresSpecialApproval: boolean;
+  warningMessage?: string;
+  errorMessage?: string;
+  costCenterName: string;
+  costCenterCode: string;
+}
+
 export interface SystemSettings {
   companyName: string;
   cnpj: string;
@@ -392,6 +450,7 @@ export interface SystemSettings {
   requireTransferApproval?: boolean;
   emailNotificationsEnabled?: boolean;
   backupIntervalDays?: number;
+  budgetPolicy?: CostCenterBudgetPolicy;
 }
 
 export type BackupScope = 'COMPLETO' | 'INVENTARIO_E_COMPRAS' | 'APENAS_INVENTARIO' | 'APENAS_COMPRAS';

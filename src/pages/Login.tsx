@@ -11,6 +11,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { dataService } from '../services/dataService';
 import { User } from '../types';
+import { copyToClipboard } from '../utils/clipboard';
 
 export const Login: React.FC = () => {
   const { login, resetPassword, failedAttempts, unlockUser } = useAuth();
@@ -127,16 +128,24 @@ Por favor, providencie o desbloqueio para que eu possa retomar minhas atividades
 
 Atenciosamente.`;
 
-  const handleCopyEmail = () => {
-    navigator.clipboard.writeText(adminEmail);
-    setCopiedType('email');
-    setTimeout(() => setCopiedType(null), 3000);
+  const handleCopyEmail = async () => {
+    try {
+      await copyToClipboard(adminEmail);
+      setCopiedType('email');
+      setTimeout(() => setCopiedType(null), 3000);
+    } catch {
+      setCopiedType('email');
+    }
   };
 
-  const handleCopyMessage = () => {
-    navigator.clipboard.writeText(formattedMessage);
-    setCopiedType('message');
-    setTimeout(() => setCopiedType(null), 3000);
+  const handleCopyMessage = async () => {
+    try {
+      await copyToClipboard(formattedMessage);
+      setCopiedType('message');
+      setTimeout(() => setCopiedType(null), 3000);
+    } catch {
+      setCopiedType('message');
+    }
   };
 
   const handleSendUnlockRequest = () => {
@@ -167,11 +176,14 @@ Atenciosamente.`;
       const subject = encodeURIComponent('Solicitação de Desbloqueio de Acesso - AlmoxPlus ERP');
       const body = encodeURIComponent(formattedMessage);
       const mailtoUrl = `mailto:${adminEmail}?subject=${subject}&body=${body}`;
-      // Open in external window/tab to avoid iframe embedding rejection from outlook.cloud.microsoft
-      const w = window.open(mailtoUrl, '_blank', 'noopener,noreferrer');
-      if (!w) {
-        handleCopyEmail();
-      }
+      // In web app / iframe, standard anchor prevents window.open popup rejections
+      const a = document.createElement('a');
+      a.href = mailtoUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     } catch {
       handleCopyEmail();
     }
