@@ -20,7 +20,49 @@ async function startServer() {
     const fmtCurrency = (val: number) =>
       (val || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-    // 1. Pergunta sobre Gastos / Compras / Valores Financeiros Globais
+    // Detecção de unidade operacional específica no prompt
+    let targetBranch: string | null = null;
+    if (/\brj\b|rio de janeiro/i.test(p)) targetBranch = "RJ";
+    else if (/\bsp\b|s[aã]o paulo/i.test(p)) targetBranch = "SP";
+    else if (/\bsjrp\b|s[aã]o jos[eé]/i.test(p)) targetBranch = "SJRP";
+    else if (/\bbsb\b|bras[ií]lia/i.test(p)) targetBranch = "BSB";
+
+    // 1. Pergunta focada em unidade operacional específica (ex: "Quanto a unidade do RJ tem gasto?")
+    if (targetBranch) {
+      const branchCCs = costCenters.filter((c: any) => c.unidade === targetBranch);
+      const branchData = summary.gastosPorUnidade?.[targetBranch] || { count: 0, total: 0 };
+      const totalBudgetBranch = branchCCs.reduce((acc: number, c: any) => acc + (c.orcamento || 0), 0);
+      const totalSpentBranch = branchCCs.reduce((acc: number, c: any) => acc + (c.gastoRealizado || 0), 0);
+      const saldoBranch = totalBudgetBranch - totalSpentBranch;
+
+      let resp = `### 📊 Relatório Financeiro e de Gastos — Unidade ${targetBranch}\n\n`;
+      resp += `Com base nos registros consolidados de compras e centros de custo do ERP Almox Plus para a **Unidade ${targetBranch}**:\n\n`;
+      
+      resp += `#### 1. Totais da Unidade ${targetBranch}\n`;
+      resp += `- **Total Gasto em Ordens de Compra (OCs):** ${fmtCurrency(branchData.total)} (${branchData.count} OCs emitidas)\n`;
+      resp += `- **Consumo Realizado nos Centros de Custo:** ${fmtCurrency(totalSpentBranch)}\n`;
+      resp += `- **Orçamento Total Alocado (Budget):** ${fmtCurrency(totalBudgetBranch)}\n`;
+      resp += `- **Saldo Orçamentário Livre:** ${fmtCurrency(saldoBranch)} (${totalBudgetBranch > 0 ? ((saldoBranch / totalBudgetBranch) * 100).toFixed(1) : "0"}% disponível)\n\n`;
+
+      if (branchCCs.length > 0) {
+        resp += `#### 2. Gastos por Centro de Custo da Unidade ${targetBranch}\n`;
+        resp += `| Código CC | Centro de Custo | Orçamento Aprovado | Gasto Realizado | Saldo Disponível | Status |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+        branchCCs.forEach((cc: any) => {
+          const isOver = (cc.gastoRealizado || 0) > (cc.orcamento || 0);
+          const status = isOver ? "⚠️ Excedido" : "✅ Regular";
+          resp += `| ${cc.codigo} | ${cc.nome} | ${fmtCurrency(cc.orcamento)} | ${fmtCurrency(cc.gastoRealizado)} | ${fmtCurrency(cc.saldoRestante)} | ${status} |\n`;
+        });
+        resp += `\n`;
+      } else {
+        resp += `*Nota: Os centros de custos operacionais da empresa estão consolidados ou compartilhados entre as filiais.*\n\n`;
+      }
+
+      resp += `💡 **Diagnóstico da Diretoria:** A Unidade ${targetBranch} apresenta ${saldoBranch >= 0 ? "equilíbrio orçamentário positivo" : "estouro orçamentário"} e suas compras seguem a governança corporativa ativa.`;
+      return resp;
+    }
+
+    // 2. Pergunta sobre Gastos / Compras / Valores Financeiros Globais
     if (
       p.includes("gasto") ||
       p.includes("custo") ||
@@ -64,7 +106,7 @@ async function startServer() {
         resp += `#### 3. Posição dos Centros de Custo\n`;
         resp += `| Código | Centro de Custo | Unidade | Orçamento | Gasto Realizado | Saldo Disponível |\n`;
         resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
-        costCenters.slice(0, 8).forEach((cc: any) => {
+        costCenters.slice(0, 10).forEach((cc: any) => {
           resp += `| ${cc.codigo} | ${cc.nome} | ${cc.unidade} | ${fmtCurrency(cc.orcamento)} | ${fmtCurrency(cc.gastoRealizado)} | ${fmtCurrency(cc.saldoRestante)} |\n`;
         });
         resp += `\n`;
@@ -74,7 +116,7 @@ async function startServer() {
       return resp;
     }
 
-    // 2. Pergunta sobre Ruptura de Estoque / Itens Críticos
+    // 3. Pergunta sobre Ruptura de Estoque / Itens Críticos
     if (
       p.includes("ruptura") ||
       p.includes("critico") ||
@@ -102,7 +144,7 @@ async function startServer() {
       return resp;
     }
 
-    // 3. Fallback Geral
+    // 4. Fallback Geral
     return (
       `### 📋 Análise Operacional do Assistente Almox Plus\n\n` +
       `Com base nos dados ativos do sistema na unidade **${context?.branch || "GLOBAL"}**:\n\n` +
@@ -149,7 +191,12 @@ Ao responder sobre valores gastos ou finanças, utilize os dados exatos informad
         },
       });
 
-      const response = await ai.models.generateContent({
+      // Timeout de 5s para responder rapidamente caso a API Gemini esteja com 503 ou latência
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout waiting for Gemini response")), 5000)
+      );
+
+      const geminiPromise = ai.models.generateContent({
         model: "gemini-3.8-flash",
         contents: prompt,
         config: {
@@ -158,11 +205,11 @@ Ao responder sobre valores gastos ou finanças, utilize os dados exatos informad
         },
       });
 
+      const response = await Promise.race([geminiPromise, timeoutPromise]);
       const replyText = response.text || generateFallbackResponse(prompt, context);
       return res.json({ reply: replyText });
     } catch (error: any) {
-      console.error("Gemini API Error:", error?.message || error);
-      // Graceful fallback using context data so user is never left without an answer
+      console.warn("Gemini API Fallback acionado:", error?.message || error);
       const fallbackText = generateFallbackResponse(prompt, context);
       return res.json({ reply: fallbackText });
     }
