@@ -43,20 +43,26 @@ export const useAuth = () => {
 const FAILED_ATTEMPTS_STORAGE_KEY = 'almoxplus_failed_attempts';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Limpeza de qualquer resíduo de usuário salvo no localStorage de sessões anteriores
+  try {
+    localStorage.removeItem('almoxplus_auth_user');
+  } catch (e) {
+    // ignore
+  }
+
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('almoxplus_auth_user');
-    if (saved) {
-      try {
+    // Usar sessionStorage para manter a sessão somente na aba ativa após login explícito.
+    // Garante que todo novo acesso via link ou nova janela inicie deslogado na tela de login.
+    try {
+      const saved = sessionStorage.getItem('almoxplus_auth_user');
+      if (saved) {
         return JSON.parse(saved);
-      } catch (e) {
-        console.error('Erro ao ler usuário salvo:', e);
       }
+    } catch (e) {
+      console.error('Erro ao ler usuário salvo da sessão:', e);
     }
-    // Default logged in user: Master (zynecta@gmail.com)
-    const zynecta = dataService.getState().users.find(u => u.email?.toLowerCase() === 'zynecta@gmail.com');
-    if (zynecta) return zynecta;
-    const master = dataService.getState().users.find(u => u.role === 'Master');
-    return master || null;
+    // Sempre iniciar deslogado (apresentando a tela de Login)
+    return null;
   });
 
   const [isFirstAccess, setIsFirstAccess] = useState<boolean>(() => {
@@ -65,10 +71,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (currentUser) {
-      localStorage.setItem('almoxplus_auth_user', JSON.stringify(currentUser));
+      sessionStorage.setItem('almoxplus_auth_user', JSON.stringify(currentUser));
       setIsFirstAccess(currentUser.firstAccess);
     } else {
-      localStorage.removeItem('almoxplus_auth_user');
+      sessionStorage.removeItem('almoxplus_auth_user');
+      try {
+        localStorage.removeItem('almoxplus_auth_user');
+      } catch (e) {
+        // ignore
+      }
       setIsFirstAccess(false);
     }
   }, [currentUser]);
