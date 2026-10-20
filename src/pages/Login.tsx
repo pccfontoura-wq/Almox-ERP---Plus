@@ -388,49 +388,6 @@ Atenciosamente.`;
             >
               {isCurrentBlocked ? 'Acesso Bloqueado (Contate o Administrador)' : 'Entrar no Sistema'}
             </Button>
-
-            {/* Master Credentials Box */}
-            <Box className="mt-5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
-              <Box className="flex items-center justify-between mb-2">
-                <Box className="flex items-center gap-1.5">
-                  <span className="text-sm">👑</span>
-                  <Typography variant="caption" className="font-extrabold uppercase tracking-wider text-slate-700 dark:text-slate-200 text-[11px]">
-                    Acesso Master do Sistema
-                  </Typography>
-                </Box>
-                <Chip
-                  label="Acesso Total"
-                  size="small"
-                  color="primary"
-                  className="text-[10px] h-5 font-bold"
-                />
-              </Box>
-
-              <div className="space-y-1 text-xs text-slate-600 dark:text-slate-300 mb-2.5 bg-white dark:bg-slate-900/70 p-2.5 rounded-lg border border-slate-200/80 dark:border-slate-700 font-mono">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 font-sans text-[11px]">E-mail Master:</span>
-                  <strong className="text-blue-600 dark:text-blue-400 select-all font-semibold">zynecta@gmail.com</strong>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 font-sans text-[11px]">Senha Master:</span>
-                  <strong className="text-slate-800 dark:text-slate-200 select-all font-semibold">Zynecta@1973</strong>
-                </div>
-              </div>
-
-              <Button
-                fullWidth
-                size="small"
-                variant="outlined"
-                onClick={() => {
-                  setEmail('zynecta@gmail.com');
-                  setPassword('Zynecta@1973');
-                  setError(null);
-                }}
-                className="text-xs font-bold py-1.5 rounded-lg border-blue-500 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40"
-              >
-                Preencher Acesso Master (1-Clique)
-              </Button>
-            </Box>
           </form>
         </CardContent>
       </Card>
