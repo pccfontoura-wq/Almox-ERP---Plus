@@ -1718,8 +1718,8 @@ class DataService {
 
   // --- USER MANAGEMENT & ADMINISTRATION ---
   public saveUser(userData: Partial<User>, currentUser: User): User {
-    if (currentUser.role !== 'Master') {
-      throw new Error('Apenas usuários com perfil Master podem gerenciar os usuários do sistema.');
+    if (currentUser.role !== 'Master' && currentUser.role !== 'Gestor') {
+      throw new Error('Apenas usuários com perfil Master ou Gestor podem gerenciar os usuários do sistema.');
     }
 
     if (!userData.name || !userData.name.trim()) {
@@ -1729,10 +1729,29 @@ class DataService {
       throw new Error('O e-mail corporativo é obrigatório.');
     }
 
-    let user: User;
     const existingIndex = userData.id 
       ? this.state.users.findIndex(u => u.id === userData.id)
       : -1;
+
+    // Regra Estrita de Proteção do Master Titular:
+    // Nenhum outro usuário (seja Gestor ou outro usuário Master) pode ver credenciais ou editar o Master Titular
+    const isTargetMasterTitular = 
+      (userData.email && userData.email.trim().toLowerCase() === 'zynecta@gmail.com') ||
+      (existingIndex !== -1 && this.state.users[existingIndex].email?.toLowerCase() === 'zynecta@gmail.com') ||
+      (userData.id === 'user-master-zynecta');
+
+    const isCurrentTitular = currentUser.email?.toLowerCase() === 'zynecta@gmail.com' || currentUser.id === 'user-master-zynecta';
+
+    if (isTargetMasterTitular && !isCurrentTitular) {
+      throw new Error('Acesso Negado: As credenciais e permissões do Master Titular são confidenciais e inalteráveis por outros administradores.');
+    }
+
+    // Gestores não podem conceder perfil Master a outros usuários
+    if (currentUser.role === 'Gestor' && userData.role === 'Master') {
+      throw new Error('Usuários com perfil Gestor não possuem alçada para conceder o perfil Master.');
+    }
+
+    let user: User;
 
     if (existingIndex !== -1) {
       user = { 
@@ -1796,16 +1815,16 @@ class DataService {
   }
 
   public deleteUser(userId: string, currentUser: User): boolean {
-    if (currentUser.role !== 'Master') {
-      throw new Error('Apenas o perfil Master pode excluir usuários.');
+    if (currentUser.role !== 'Master' && currentUser.role !== 'Gestor') {
+      throw new Error('Apenas usuários com perfil Master ou Gestor podem excluir usuários.');
     }
     if (userId === currentUser.id) {
       throw new Error('Não é permitido excluir o seu próprio usuário logado.');
     }
     const idx = this.state.users.findIndex(u => u.id === userId);
     if (idx === -1) throw new Error('Usuário não encontrado.');
-    if (this.state.users[idx].email?.toLowerCase() === 'zynecta@gmail.com') {
-      throw new Error('Não é permitido excluir o usuário Master principal do sistema (zynecta@gmail.com).');
+    if (this.state.users[idx].email?.toLowerCase() === 'zynecta@gmail.com' || this.state.users[idx].id === 'user-master-zynecta') {
+      throw new Error('Não é permitido excluir o usuário Master Titular do sistema (zynecta@gmail.com).');
     }
     const deleted = this.state.users.splice(idx, 1)[0];
     this.logAudit(currentUser, 'EXCLUIR', 'Administração', `Usuário ${deleted.email} removido do sistema.`, JSON.stringify(deleted), null, 'GLOBAL');
@@ -2131,8 +2150,8 @@ class DataService {
     createSafetyBackupBeforeRestore: boolean,
     currentUser: User
   ): BackupSnapshot {
-    if (currentUser.role !== 'Master') {
-      throw new Error('Por segurança, apenas usuários com perfil Master podem restaurar pontos de backup.');
+    if (currentUser.role !== 'Master' && currentUser.role !== 'Gestor') {
+      throw new Error('Por segurança, apenas usuários com perfil Master ou Gestor podem restaurar pontos de backup.');
     }
 
     const snapshots = this.getBackupSnapshots();
@@ -2204,8 +2223,8 @@ class DataService {
   }
 
   public deleteBackupSnapshot(snapshotId: string, currentUser: User): boolean {
-    if (currentUser.role !== 'Master') {
-      throw new Error('Apenas o perfil Master pode remover pontos de restauração.');
+    if (currentUser.role !== 'Master' && currentUser.role !== 'Gestor') {
+      throw new Error('Apenas o perfil Master ou Gestor pode remover pontos de restauração.');
     }
     const list = this.getBackupSnapshots();
     const idx = list.findIndex(s => s.id === snapshotId);
@@ -2343,8 +2362,8 @@ class DataService {
     restoreScope: BackupScope = 'COMPLETO',
     createSafetySnapshot: boolean = true
   ): boolean {
-    if (currentUser.role !== 'Master') {
-      throw new Error('Apenas o perfil Master pode restaurar backups.');
+    if (currentUser.role !== 'Master' && currentUser.role !== 'Gestor') {
+      throw new Error('Apenas o perfil Master ou Gestor pode restaurar backups.');
     }
     try {
       const parsed = JSON.parse(jsonStr);

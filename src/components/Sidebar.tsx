@@ -7,6 +7,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { dataService } from '../services/dataService';
 import { AppIcon } from './AppIcon';
+import { UserRole } from '../types';
 
 interface SidebarProps {
   currentTab: string;
@@ -34,7 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, open 
     { id: 'relatorios', label: 'Relatórios', icon: BarChart3 },
     { id: 'indicadores', label: 'Indicadores KPIs', icon: TrendingUp },
     { id: 'assistente-ia', label: 'Assistente IA', icon: Bot, isNew: true },
-    { id: 'administracao', label: 'Administração', icon: ShieldCheck, masterOnly: true },
+    { id: 'administracao', label: 'Administração', icon: ShieldCheck, allowedRoles: ['Master', 'Gestor'] as UserRole[] },
     { id: 'configuracoes', label: 'Configurações', icon: Settings },
     { id: 'meu-perfil', label: 'Meu Perfil', icon: User }
   ];
@@ -45,8 +46,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, open 
     >
       <List className="px-2.5 py-4 space-y-1.5 flex-1">
         {menuItems.map((item) => {
-          if (item.masterOnly && currentUser?.role !== 'Master') {
-            return null; // Restricted menu item
+          if (item.allowedRoles && (!currentUser || !item.allowedRoles.includes(currentUser.role))) {
+            return null; // Apenas Master e Gestor podem visualizar o menu de Administração
           }
 
           const Icon = item.icon;

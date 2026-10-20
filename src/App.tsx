@@ -25,7 +25,7 @@ import { Configuracoes } from './pages/Configuracoes';
 import { MeuPerfil } from './pages/MeuPerfil';
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, currentUser } = useAuth();
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -56,6 +56,9 @@ const AppContent: React.FC = () => {
       case 'assistente-ia':
         return <AssistenteIA />;
       case 'administracao':
+        if (currentUser?.role !== 'Master' && currentUser?.role !== 'Gestor') {
+          return <Dashboard onNavigate={(tab) => setCurrentTab(tab)} />;
+        }
         return <Administracao />;
       case 'configuracoes':
         return <Configuracoes />;

@@ -50,12 +50,20 @@ export const Administracao: React.FC = () => {
   const { currentUser, failedAttempts, unlockUser, clearAllLockouts } = useAuth();
   const { refreshData } = useApp();
 
+  // Verificações de segurança e alçadas
+  const isTitularMaster = (u?: Partial<User> | null) =>
+    Boolean(u?.email?.toLowerCase() === 'zynecta@gmail.com' || u?.id === 'user-master-zynecta');
+
+  const isCurrentTitular = currentUser?.email?.toLowerCase() === 'zynecta@gmail.com' || currentUser?.id === 'user-master-zynecta';
+  const isMasterOrGestor = currentUser?.role === 'Master' || currentUser?.role === 'Gestor';
+
   const [currentTab, setCurrentTab] = useState(0);
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('TODAS');
 
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User>>({});
-  const [userPassword, setUserPassword] = useState('senha123');
-  const [confirmPassword, setConfirmPassword] = useState('senha123');
+  const [userPassword, setUserPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [requirePasswordChange, setRequirePasswordChange] = useState(true);
   const [changePasswordToggle, setChangePasswordToggle] = useState(false);
@@ -88,8 +96,19 @@ export const Administracao: React.FC = () => {
   const snapshots = useMemo(() => dataService.getBackupSnapshots(), [state, refreshTick]);
   const liveMetrics = useMemo(() => dataService.calculateBackupMetrics(state), [state, refreshTick]);
 
+  // Usuários com filtro por unidade (com acesso a qualquer unidade liberado para Master e Gestor)
+  const filteredUsers = useMemo(() => {
+    if (selectedBranchFilter === 'TODAS') return users;
+    return users.filter(u => u.branch === selectedBranchFilter);
+  }, [users, selectedBranchFilter]);
+
   const handleDeleteUser = (user: User) => {
     if (!currentUser) return;
+    if (isTitularMaster(user)) {
+      setToastSeverity('error');
+      setToastMessage('Não é permitido excluir o usuário Master Titular do sistema.');
+      return;
+    }
     if (user.id === currentUser.id) {
       setToastSeverity('error');
       setToastMessage('Você não pode excluir o seu próprio usuário logado.');
@@ -115,23 +134,26 @@ export const Administracao: React.FC = () => {
       id: 'role',
       label: 'Perfil de Acesso',
       accessor: (u) => u.role,
-      render: (u) => (
-        <div className="flex items-center gap-1">
-          <Chip
-            label={u.role}
-            color={u.role === 'Master' ? 'primary' : u.role === 'Regular' ? 'info' : 'default'}
-            size="small"
-            className="font-bold text-[10px] h-5"
-          />
-          {u.email.toLowerCase() === 'zynecta@gmail.com' && (
+      render: (u) => {
+        const isTitular = isTitularMaster(u);
+        return (
+          <div className="flex items-center gap-1 flex-wrap">
             <Chip
-              label="👑 Titular"
+              label={u.role}
+              color={u.role === 'Master' ? 'primary' : u.role === 'Gestor' ? 'secondary' : u.role === 'Regular' ? 'info' : 'default'}
               size="small"
-              className="font-bold text-[9px] h-4 bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700"
+              className="font-bold text-[10px] h-5"
             />
-          )}
-        </div>
-      )
+            {isTitular && (
+              <Chip
+                label="👑 Master Titular"
+                size="small"
+                className="font-bold text-[9px] h-4 bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-200 border border-amber-300 dark:border-amber-700"
+              />
+            )}
+          </div>
+        );
+      }
     },
     { id: 'branch', label: 'Unidade Principal', accessor: (u) => u.branch },
     { id: 'isFirstAccess', label: 'Primeiro Acesso', accessor: (u) => u.isFirstAccess ? 'Sim (Exige Troca)' : 'Não' },
@@ -203,39 +225,56 @@ export const Administracao: React.FC = () => {
       label: 'Ações de Gestão',
       accessor: (u) => u.id,
       exportable: false,
-      render: (u) => (
-        <div className="flex items-center gap-1">
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<Edit3 className="w-3.5 h-3.5" />}
-            onClick={() => {
-              setFormError(null);
-              setEditingUser({ ...u });
-              setUserPassword('');
-              setConfirmPassword('');
-              setShowPassword(false);
-              setRequirePasswordChange(u.firstAccess ?? false);
-              setChangePasswordToggle(false);
-              setUserModalOpen(true);
-            }}
-            className="text-xs py-0.5 px-2.5 rounded-lg border-slate-300 dark:border-slate-700"
-          >
-            Editar Permissões
-          </Button>
-          {currentUser?.id !== u.id && u.email.toLowerCase() !== 'zynecta@gmail.com' && (
-            <Tooltip title="Excluir Usuário">
-              <IconButton
+      render: (u) => {
+        const isTargetTitular = isTitularMaster(u);
+        const canManageTarget = !isTargetTitular || isCurrentTitular;
+
+        return (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {canManageTarget ? (
+              <Button
                 size="small"
-                onClick={() => handleDeleteUser(u)}
-                className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 p-1.5 rounded-lg"
+                variant="outlined"
+                startIcon={<Edit3 className="w-3.5 h-3.5" />}
+                onClick={() => {
+                  setFormError(null);
+                  setEditingUser({ ...u });
+                  setUserPassword('');
+                  setConfirmPassword('');
+                  setShowPassword(false);
+                  setRequirePasswordChange(u.firstAccess ?? false);
+                  setChangePasswordToggle(false);
+                  setUserModalOpen(true);
+                }}
+                className="text-xs py-0.5 px-2.5 rounded-lg border-slate-300 dark:border-slate-700"
               >
-                <Trash2 className="w-4 h-4" />
-              </IconButton>
-            </Tooltip>
-          )}
-        </div>
-      )
+                Editar Permissões
+              </Button>
+            ) : (
+              <Tooltip title="As credenciais e permissões do Master Titular são restritas e protegidas contra visualização e edição por outros administradores (incluindo outros usuários Master).">
+                <Chip
+                  icon={<Lock className="w-3 h-3 text-amber-700 dark:text-amber-300" />}
+                  label="Permissões Protegidas"
+                  size="small"
+                  className="text-[10px] font-bold bg-amber-50 text-amber-900 border border-amber-300 dark:bg-amber-950/50 dark:text-amber-200 dark:border-amber-800"
+                />
+              </Tooltip>
+            )}
+
+            {!isTargetTitular && currentUser?.id !== u.id && (
+              <Tooltip title="Excluir Usuário">
+                <IconButton
+                  size="small"
+                  onClick={() => handleDeleteUser(u)}
+                  className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 p-1.5 rounded-lg"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </div>
+        );
+      }
     }
   ];
 
@@ -254,6 +293,17 @@ export const Administracao: React.FC = () => {
     e.preventDefault();
     if (!currentUser) return;
     setFormError(null);
+
+    const isTargetTitular = isTitularMaster(editingUser);
+    if (isTargetTitular && !isCurrentTitular) {
+      setFormError('Acesso Negado: As credenciais e permissões do Master Titular são restritas e não podem ser visualizadas ou editadas por outros usuários.');
+      return;
+    }
+
+    if (currentUser?.role === 'Gestor' && editingUser.role === 'Master') {
+      setFormError('Usuários com perfil Gestor não possuem alçada para conceder o perfil Master.');
+      return;
+    }
 
     const isNew = !editingUser.id;
 
@@ -301,7 +351,7 @@ export const Administracao: React.FC = () => {
       refreshData();
       setToastSeverity('success');
       setToastMessage(isNew 
-        ? `Usuário ${saved.name} cadastrado com sucesso! Senha configurada: ${u.password}`
+        ? `Usuário ${saved.name} cadastrado com sucesso!`
         : `Usuário ${saved.name} atualizado com sucesso!`
       );
     } catch (err: any) {
@@ -508,6 +558,17 @@ export const Administracao: React.FC = () => {
     return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
+  if (!isMasterOrGestor) {
+    return (
+      <Box className="p-8 max-w-xl mx-auto text-center space-y-4">
+        <Alert severity="error" className="rounded-xl shadow-sm text-left">
+          <div className="font-bold text-sm mb-1">Acesso Restrito à Administração</div>
+          <div>A aba de Administração do Sistema é de acesso exclusivo para usuários com perfil <strong>Master</strong> ou <strong>Gestor</strong> com alçada sobre as unidades.</div>
+        </Alert>
+      </Box>
+    );
+  }
+
   return (
     <Box className="space-y-6">
       <Breadcrumb items={[{ label: 'Administração do Sistema' }]} />
@@ -531,6 +592,39 @@ export const Administracao: React.FC = () => {
 
       {currentTab === 0 && (
         <div className="space-y-4">
+          {/* BARRA DE GOVERNANÇA E FILTRO DE UNIDADES (ACESSO MULTIUNIDADE MASTER & GESTOR) */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />
+              <div>
+                <Typography variant="subtitle2" className="font-extrabold text-slate-900 dark:text-white text-xs sm:text-sm">
+                  Alçada Administrativa Corporativa: Acesso Global a Todas as Unidades
+                </Typography>
+                <Typography variant="caption" className="text-slate-500 dark:text-slate-400 block text-[11px]">
+                  Como usuário <strong>{currentUser?.role}</strong>, você possui autorização irrestrita para visualizar e auditar todas as unidades e usuários do grupo.
+                </Typography>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+              <FormControl size="small" className="min-w-[220px]">
+                <InputLabel>Filtrar por Unidade</InputLabel>
+                <Select
+                  value={selectedBranchFilter}
+                  label="Filtrar por Unidade"
+                  onChange={(e) => setSelectedBranchFilter(e.target.value)}
+                >
+                  <MenuItem value="TODAS">🌐 Todas as Unidades (Acesso Global)</MenuItem>
+                  {dataService.getBranches(true).map(b => (
+                    <MenuItem key={b.id} value={b.code}>
+                      Unidade {b.code} ({b.name})
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </div>
+          </div>
+
           {Object.values(failedAttempts).some((a) => a.blocked) && (
             <Alert
               severity="warning"
@@ -563,30 +657,30 @@ export const Administracao: React.FC = () => {
 
           <DataTable
             title="Usuários e Permissões de Acesso (RBAC)"
-            subTitle="Gerenciamento de três níveis de permissão (Master, Regular, Visitante) e unidades associadas."
+            subTitle="Gerenciamento de níveis de permissão com acesso a todas as unidades corporativas."
             columns={userColumns}
-          data={users}
-          onAddClick={() => {
-            setFormError(null);
-            setEditingUser({
-              name: '',
-              email: '',
-              role: 'Regular',
-              branch: 'SP',
-              department: '',
-              phone: '',
-              isFirstAccess: true
-            });
-            setUserPassword('senha123');
-            setConfirmPassword('senha123');
-            setShowPassword(false);
-            setRequirePasswordChange(true);
-            setChangePasswordToggle(false);
-            setUserModalOpen(true);
-          }}
-          addButtonLabel="Cadastrar Novo Usuário"
-          canEditOrAdd={true}
-        />
+            data={filteredUsers}
+            onAddClick={() => {
+              setFormError(null);
+              setEditingUser({
+                name: '',
+                email: '',
+                role: currentUser?.role === 'Gestor' ? 'Regular' : 'Regular',
+                branch: 'SP',
+                department: '',
+                phone: '',
+                isFirstAccess: true
+              });
+              setUserPassword('senha123');
+              setConfirmPassword('senha123');
+              setShowPassword(false);
+              setRequirePasswordChange(true);
+              setChangePasswordToggle(false);
+              setUserModalOpen(true);
+            }}
+            addButtonLabel="Cadastrar Novo Usuário"
+            canEditOrAdd={true}
+          />
         </div>
       )}
 
@@ -1436,252 +1530,281 @@ export const Administracao: React.FC = () => {
 
       {/* USER MODAL */}
       <Dialog open={userModalOpen} onClose={() => setUserModalOpen(false)} maxWidth="sm" fullWidth>
-        <form onSubmit={handleSaveUser}>
-          <DialogTitle className="font-bold flex items-center gap-2 border-b border-slate-200 dark:border-slate-800">
-            <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            {editingUser.id ? 'Editar Permissões do Usuário' : 'Cadastrar Novo Usuário'}
-          </DialogTitle>
-          <DialogContent dividers className="space-y-4">
-            {formError && <Alert severity="error">{formError}</Alert>}
+        {isTitularMaster(editingUser) && !isCurrentTitular ? (
+          <div>
+            <DialogTitle className="font-bold flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 text-rose-600 dark:text-rose-400">
+              <ShieldAlert className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              Acesso Estritamente Restrito
+            </DialogTitle>
+            <DialogContent dividers className="py-6 space-y-3">
+              <Alert severity="error" className="rounded-xl font-medium">
+                As credenciais e permissões do <strong>Master Titular</strong> são confidenciais e protegidas contra visualização e edição por outros administradores (inclusive outros usuários Master ou Gestores). Apenas o próprio titular logado possui alçada para gerenciar seus dados.
+              </Alert>
+            </DialogContent>
+            <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+              <Button onClick={() => setUserModalOpen(false)} variant="contained" color="inherit">
+                Fechar
+              </Button>
+            </DialogActions>
+          </div>
+        ) : (
+          <form onSubmit={handleSaveUser}>
+            <DialogTitle className="font-bold flex items-center gap-2 border-b border-slate-200 dark:border-slate-800">
+              <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              {editingUser.id ? 'Editar Permissões do Usuário' : 'Cadastrar Novo Usuário'}
+            </DialogTitle>
+            <DialogContent dividers className="space-y-4">
+              {formError && <Alert severity="error">{formError}</Alert>}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <TextField
-                fullWidth
-                label="Nome Completo"
-                value={editingUser.name || ''}
-                onChange={(e) => setEditingUser({ ...editingUser, name: e.target.value })}
-                required
-                placeholder="Ex: Paulo Fontoura"
-              />
+              {isTitularMaster(editingUser) && (
+                <Alert severity="info" className="rounded-xl text-xs font-medium">
+                  Você está editando a conta do <strong>Master Titular</strong>. O perfil Master é mantido permanentemente para garantir a integridade do sistema.
+                </Alert>
+              )}
 
-              <TextField
-                fullWidth
-                type="email"
-                label="E-mail Corporativo"
-                value={editingUser.email || ''}
-                onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
-                required
-                placeholder="Ex: usuario@empresa.com.br"
-              />
-            </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <TextField
+                  fullWidth
+                  label="Nome Completo"
+                  value={editingUser.name || ''}
+                  onChange={(e) => setEditingUser({ ...editingUser, name: e.target.value })}
+                  required
+                  placeholder="Ex: Paulo Fontoura"
+                />
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <FormControl fullWidth required>
-                <InputLabel>Perfil de Acesso</InputLabel>
-                <Select
-                  value={editingUser.role || 'Regular'}
-                  onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as UserRole })}
-                  label="Perfil de Acesso"
-                >
-                  <MenuItem value="Master">👑 Master (Acesso Total & Usuários)</MenuItem>
-                  <MenuItem value="Regular">🏢 Regular (Operação de Almoxarifado)</MenuItem>
-                  <MenuItem value="Almoxarife">📦 Almoxarife (Movimentações)</MenuItem>
-                  <MenuItem value="Comprador">🛒 Comprador (Cotações & OCs)</MenuItem>
-                  <MenuItem value="Gestor">📊 Gestor (Aprovações & Relatórios)</MenuItem>
-                  <MenuItem value="Visitante">👁️ Visitante (Leitura / Auditoria)</MenuItem>
-                </Select>
-              </FormControl>
+                <TextField
+                  fullWidth
+                  type="email"
+                  label="E-mail Corporativo"
+                  value={editingUser.email || ''}
+                  onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
+                  required
+                  disabled={Boolean(editingUser.id && isTitularMaster(editingUser))}
+                  placeholder="Ex: usuario@empresa.com.br"
+                />
+              </div>
 
-              <FormControl fullWidth required>
-                <InputLabel>Unidade Principal</InputLabel>
-                <Select
-                  value={editingUser.branch || 'SP'}
-                  onChange={(e) => setEditingUser({ ...editingUser, branch: e.target.value as Branch })}
-                  label="Unidade Principal"
-                >
-                  {dataService.getBranches(true).map(b => (
-                    <MenuItem key={b.id} value={b.code}>
-                      Unidade {b.code} ({b.name})
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <TextField
-                fullWidth
-                label="Departamento / Setor (Opcional)"
-                value={editingUser.department || ''}
-                onChange={(e) => setEditingUser({ ...editingUser, department: e.target.value })}
-                placeholder="Ex: Logística & Suprimentos"
-              />
-
-              <TextField
-                fullWidth
-                label="Telefone / Ramal (Opcional)"
-                value={editingUser.phone || ''}
-                onChange={(e) => setEditingUser({ ...editingUser, phone: e.target.value })}
-                placeholder="Ex: (11) 98765-4321"
-              />
-            </div>
-
-            {/* PASSWORD CONFIGURATION SECTION */}
-            {!editingUser.id ? (
-              <Box className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-slate-800 dark:text-slate-100 font-bold text-sm">
-                    <KeyRound className="w-4 h-4 text-amber-500" />
-                    <span>Definir Senha Inicial de Acesso</span>
-                  </div>
-                  <Button
-                    size="small"
-                    variant="text"
-                    onClick={() => {
-                      setUserPassword('senha123');
-                      setConfirmPassword('senha123');
-                    }}
-                    className="text-[11px] normal-case text-blue-600 dark:text-blue-400 font-semibold"
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <FormControl fullWidth required>
+                  <InputLabel>Perfil de Acesso</InputLabel>
+                  <Select
+                    value={editingUser.role || 'Regular'}
+                    onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as UserRole })}
+                    label="Perfil de Acesso"
+                    disabled={Boolean(editingUser.id && isTitularMaster(editingUser))}
                   >
-                    Usar padrão: senha123
-                  </Button>
-                </div>
+                    {currentUser?.role === 'Master' && (
+                      <MenuItem value="Master">👑 Master (Acesso Total & Usuários)</MenuItem>
+                    )}
+                    <MenuItem value="Gestor">📊 Gestor (Aprovações & Relatórios)</MenuItem>
+                    <MenuItem value="Almoxarife">📦 Almoxarife (Movimentações)</MenuItem>
+                    <MenuItem value="Comprador">🛒 Comprador (Cotações & OCs)</MenuItem>
+                    <MenuItem value="Regular">🏢 Regular (Operação de Almoxarifado)</MenuItem>
+                    <MenuItem value="Visitante">👁️ Visitante (Leitura / Auditoria)</MenuItem>
+                  </Select>
+                </FormControl>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <TextField
-                    fullWidth
-                    label="Senha Inicial *"
-                    type={showPassword ? 'text' : 'password'}
-                    value={userPassword}
-                    onChange={(e) => setUserPassword(e.target.value)}
-                    required
-                    helperText="Mínimo 6 caracteres"
-                    slotProps={{
-                      input: {
-                        startAdornment: (
-                          <InputAdornment position="start">
-                            <Lock className="w-4 h-4 text-slate-400" />
-                          </InputAdornment>
-                        ),
-                        endAdornment: (
-                          <InputAdornment position="end">
-                            <IconButton size="small" onClick={() => setShowPassword(!showPassword)} edge="end">
-                              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                            </IconButton>
-                          </InputAdornment>
-                        )
-                      }
-                    }}
-                  />
+                <FormControl fullWidth required>
+                  <InputLabel>Unidade Principal</InputLabel>
+                  <Select
+                    value={editingUser.branch || 'SP'}
+                    onChange={(e) => setEditingUser({ ...editingUser, branch: e.target.value as Branch })}
+                    label="Unidade Principal"
+                  >
+                    {dataService.getBranches(true).map(b => (
+                      <MenuItem key={b.id} value={b.code}>
+                        Unidade {b.code} ({b.name})
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </div>
 
-                  <TextField
-                    fullWidth
-                    label="Confirmar Senha *"
-                    type={showPassword ? 'text' : 'password'}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    helperText="Repita a senha digitada"
-                  />
-                </div>
-
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={requirePasswordChange}
-                      onChange={(e) => setRequirePasswordChange(e.target.checked)}
-                      color="primary"
-                      size="small"
-                    />
-                  }
-                  label={
-                    <Typography variant="caption" className="text-slate-600 dark:text-slate-300 font-medium">
-                      Exigir alteração de senha obrigatória no primeiro login do usuário
-                    </Typography>
-                  }
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <TextField
+                  fullWidth
+                  label="Departamento / Setor (Opcional)"
+                  value={editingUser.department || ''}
+                  onChange={(e) => setEditingUser({ ...editingUser, department: e.target.value })}
+                  placeholder="Ex: Logística & Suprimentos"
                 />
-              </Box>
-            ) : (
-              <Box className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={changePasswordToggle}
-                      onChange={(e) => setChangePasswordToggle(e.target.checked)}
-                      color="primary"
-                      size="small"
-                    />
-                  }
-                  label={
-                    <Typography variant="body2" className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+
+                <TextField
+                  fullWidth
+                  label="Telefone / Ramal (Opcional)"
+                  value={editingUser.phone || ''}
+                  onChange={(e) => setEditingUser({ ...editingUser, phone: e.target.value })}
+                  placeholder="Ex: (11) 98765-4321"
+                />
+              </div>
+
+              {/* PASSWORD CONFIGURATION SECTION */}
+              {!editingUser.id ? (
+                <Box className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-slate-800 dark:text-slate-100 font-bold text-sm">
                       <KeyRound className="w-4 h-4 text-amber-500" />
-                      Redefinir Senha de Acesso deste Usuário
-                    </Typography>
-                  }
-                />
+                      <span>Definir Senha Inicial de Acesso</span>
+                    </div>
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={() => {
+                        setUserPassword('senha123');
+                        setConfirmPassword('senha123');
+                      }}
+                      className="text-[11px] normal-case text-blue-600 dark:text-blue-400 font-semibold"
+                    >
+                      Usar padrão: senha123
+                    </Button>
+                  </div>
 
-                {changePasswordToggle && (
-                  <div className="space-y-3 pt-2">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <TextField
-                        fullWidth
-                        label="Nova Senha *"
-                        type={showPassword ? 'text' : 'password'}
-                        value={userPassword}
-                        onChange={(e) => setUserPassword(e.target.value)}
-                        required={changePasswordToggle}
-                        helperText="Mínimo 6 caracteres"
-                        slotProps={{
-                          input: {
-                            startAdornment: (
-                              <InputAdornment position="start">
-                                <Lock className="w-4 h-4 text-slate-400" />
-                              </InputAdornment>
-                            ),
-                            endAdornment: (
-                              <InputAdornment position="end">
-                                <IconButton size="small" onClick={() => setShowPassword(!showPassword)} edge="end">
-                                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                </IconButton>
-                              </InputAdornment>
-                            )
-                          }
-                        }}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <TextField
+                      fullWidth
+                      label="Senha Inicial *"
+                      type={showPassword ? 'text' : 'password'}
+                      value={userPassword}
+                      onChange={(e) => setUserPassword(e.target.value)}
+                      required
+                      helperText="Mínimo 6 caracteres"
+                      slotProps={{
+                        input: {
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <Lock className="w-4 h-4 text-slate-400" />
+                            </InputAdornment>
+                          ),
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              <IconButton size="small" onClick={() => setShowPassword(!showPassword)} edge="end">
+                                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </IconButton>
+                            </InputAdornment>
+                          )
+                        }
+                      }}
+                    />
+
+                    <TextField
+                      fullWidth
+                      label="Confirmar Senha *"
+                      type={showPassword ? 'text' : 'password'}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      helperText="Repita a senha digitada"
+                    />
+                  </div>
+
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={requirePasswordChange}
+                        onChange={(e) => setRequirePasswordChange(e.target.checked)}
+                        color="primary"
+                        size="small"
                       />
+                    }
+                    label={
+                      <Typography variant="caption" className="text-slate-600 dark:text-slate-300 font-medium">
+                        Exigir alteração de senha obrigatória no primeiro login do usuário
+                      </Typography>
+                    }
+                  />
+                </Box>
+              ) : (
+                <Box className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={changePasswordToggle}
+                        onChange={(e) => setChangePasswordToggle(e.target.checked)}
+                        color="primary"
+                        size="small"
+                      />
+                    }
+                    label={
+                      <Typography variant="body2" className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                        <KeyRound className="w-4 h-4 text-amber-500" />
+                        Redefinir Senha de Acesso deste Usuário
+                      </Typography>
+                    }
+                  />
 
-                      <TextField
-                        fullWidth
-                        label="Confirmar Nova Senha *"
-                        type={showPassword ? 'text' : 'password'}
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        required={changePasswordToggle}
+                  {changePasswordToggle && (
+                    <div className="space-y-3 pt-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <TextField
+                          fullWidth
+                          label="Nova Senha *"
+                          type={showPassword ? 'text' : 'password'}
+                          value={userPassword}
+                          onChange={(e) => setUserPassword(e.target.value)}
+                          required={changePasswordToggle}
+                          helperText="Mínimo 6 caracteres"
+                          slotProps={{
+                            input: {
+                              startAdornment: (
+                                <InputAdornment position="start">
+                                  <Lock className="w-4 h-4 text-slate-400" />
+                                </InputAdornment>
+                              ),
+                              endAdornment: (
+                                <InputAdornment position="end">
+                                  <IconButton size="small" onClick={() => setShowPassword(!showPassword)} edge="end">
+                                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                  </IconButton>
+                                </InputAdornment>
+                              )
+                            }
+                          }}
+                        />
+
+                        <TextField
+                          fullWidth
+                          label="Confirmar Nova Senha *"
+                          type={showPassword ? 'text' : 'password'}
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          required={changePasswordToggle}
+                        />
+                      </div>
+
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={requirePasswordChange}
+                            onChange={(e) => setRequirePasswordChange(e.target.checked)}
+                            color="primary"
+                            size="small"
+                          />
+                        }
+                        label={
+                          <Typography variant="caption" className="text-slate-600 dark:text-slate-300 font-medium">
+                            Exigir troca desta senha no próximo acesso do usuário
+                          </Typography>
+                        }
                       />
                     </div>
-
-                    <FormControlLabel
-                      control={
-                        <Checkbox
-                          checked={requirePasswordChange}
-                          onChange={(e) => setRequirePasswordChange(e.target.checked)}
-                          color="primary"
-                          size="small"
-                        />
-                      }
-                      label={
-                        <Typography variant="caption" className="text-slate-600 dark:text-slate-300 font-medium">
-                          Exigir troca desta senha no próximo acesso do usuário
-                        </Typography>
-                      }
-                    />
-                  </div>
-                )}
-              </Box>
-            )}
-          </DialogContent>
-          <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
-            <Button onClick={() => setUserModalOpen(false)} color="inherit">Cancelar</Button>
-            <Button
-              type="submit"
-              variant="contained"
-              color="primary"
-              sx={{ color: '#ffffff !important' }}
-              className="font-bold text-white"
-            >
-              {editingUser.id ? 'Atualizar Usuário' : 'Cadastrar Usuário'}
-            </Button>
-          </DialogActions>
-        </form>
+                  )}
+                </Box>
+              )}
+            </DialogContent>
+            <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+              <Button onClick={() => setUserModalOpen(false)} color="inherit">Cancelar</Button>
+              <Button
+                type="submit"
+                variant="contained"
+                color="primary"
+                sx={{ color: '#ffffff !important' }}
+                className="font-bold text-white"
+              >
+                {editingUser.id ? 'Atualizar Usuário' : 'Cadastrar Usuário'}
+              </Button>
+            </DialogActions>
+          </form>
+        )}
       </Dialog>
 
       <Snackbar
