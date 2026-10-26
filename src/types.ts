@@ -63,6 +63,14 @@ export interface ProductAttachment {
   dataUrl?: string;
 }
 
+export interface ProductBatch {
+  batchNumber: string; // ex: "LT-2025/MED-01"
+  expirationDate: string; // ex: "2026-08-14"
+  branch?: Branch; // Filial específica ou 'GLOBAL'
+  quantity?: number;
+  notes?: string;
+}
+
 export interface Product {
   id: string;
   code: string;
@@ -75,6 +83,8 @@ export interface Product {
   unitPrice: number;
   locationSlot: string; // e.g. "PRAT-A1-S2"
   expirationDate?: string;
+  batchNumber?: string; // Código do Lote (ex: "LT-2025/MED-01")
+  batches?: ProductBatch[]; // Registro de lotes por unidade ou múltiplos lotes
   description?: string;
   attachments?: ProductAttachment[];
   active: boolean;

@@ -12,6 +12,8 @@ import {
   INITIAL_ASSETS, INITIAL_INVENTORIES, INITIAL_AUDIT_LOGS, 
   INITIAL_NOTIFICATIONS, INITIAL_SETTINGS, INITIAL_BRANCHES, DEFAULT_BUDGET_POLICY
 } from '../data/seedData';
+import { db } from '../lib/firebase';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 
 const STORAGE_KEY = 'almoxplus_data_v2';
 
@@ -52,10 +54,24 @@ interface AppState {
 
 class DataService {
   private state: AppState;
+  private listeners: Array<() => void> = [];
+  private isSyncingFromCloud: boolean = false;
+  private cloudPushTimer: any = null;
+  private cloudSyncStatus: {
+    connected: boolean;
+    lastSync: string | null;
+    databaseId: string;
+    error?: string;
+  } = {
+    connected: false,
+    lastSync: null,
+    databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+  };
 
   constructor() {
     this.state = this.loadState();
     this.ensureBackupRoutineInitialized();
+    this.initCloudSync();
   }
 
   private loadState(): AppState {
@@ -118,7 +134,7 @@ class DataService {
             if (l.details) l.details = l.details.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
           });
         }
-        // Ensure all products have keys for all branches
+        // Ensure all products have keys for all branches and sync batch/expiration metadata
         if (parsed.products && Array.isArray(parsed.products)) {
           for (const p of parsed.products) {
             if (!p.stockByBranch) p.stockByBranch = {};
@@ -126,6 +142,21 @@ class DataService {
               if (p.stockByBranch[b.code] === undefined) {
                 p.stockByBranch[b.code] = 0;
               }
+            }
+            // Sync seed batch information and expiration dates
+            const seedProd = INITIAL_PRODUCTS.find((sp: any) => sp.code === p.code);
+            if (seedProd) {
+              if (seedProd.batchNumber && !p.batchNumber) p.batchNumber = seedProd.batchNumber;
+              if (seedProd.batches && (!p.batches || p.batches.length === 0)) p.batches = seedProd.batches;
+              if (seedProd.expirationDate) p.expirationDate = seedProd.expirationDate;
+            }
+          }
+        }
+        // Ensure all seed purchase orders exist
+        if (parsed.purchaseOrders && Array.isArray(parsed.purchaseOrders)) {
+          for (const seedPo of INITIAL_PURCHASE_ORDERS) {
+            if (!parsed.purchaseOrders.some((po: any) => po.id === seedPo.id || po.code === seedPo.code)) {
+              parsed.purchaseOrders.push(seedPo);
             }
           }
         }
@@ -228,7 +259,7 @@ class DataService {
     return initialState;
   }
 
-  public saveState(newState?: AppState) {
+  public saveState(newState?: AppState, skipCloudPush = false) {
     if (newState) {
       this.state = newState;
     }
@@ -237,6 +268,258 @@ class DataService {
     } catch (e) {
       console.error('Erro ao salvar estado no localStorage:', e);
     }
+
+    if (!skipCloudPush && !this.isSyncingFromCloud && typeof window !== 'undefined') {
+      if (this.cloudPushTimer) {
+        clearTimeout(this.cloudPushTimer);
+      }
+      this.cloudPushTimer = setTimeout(() => {
+        this.pushStateToCloud();
+      }, 1000);
+    }
+  }
+
+  // ==========================================
+  // SINCRONIZAÇÃO EM NUVEM (MULTI-COMPUTADOR E MULTI-FILIAIS)
+  // ==========================================
+
+  private initCloudSync() {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
+
+      onSnapshot(stateDocRef, (snapshot) => {
+        if (snapshot.exists()) {
+          const cloudData = snapshot.data();
+          if (cloudData && cloudData.state) {
+            this.isSyncingFromCloud = true;
+            this.state = cloudData.state;
+            this.cloudSyncStatus = {
+              connected: true,
+              lastSync: new Date().toISOString(),
+              databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+            };
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+            } catch (e) {
+              // ignore
+            }
+            this.isSyncingFromCloud = false;
+            this.notifyListeners();
+          }
+        } else {
+          // Documento inicial ainda não gravado na nuvem -> envia estado inicial
+          this.pushStateToCloud();
+        }
+      }, (error) => {
+        console.warn('Firestore onSnapshot listener status:', error.message);
+        this.cloudSyncStatus.connected = false;
+        this.cloudSyncStatus.error = error.message;
+      });
+    } catch (err: any) {
+      console.warn('Falha ao inicializar sincronização em nuvem:', err.message);
+      this.cloudSyncStatus.connected = false;
+      this.cloudSyncStatus.error = err.message;
+    }
+  }
+
+  public subscribe(listener: () => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== listener);
+    };
+  }
+
+  private notifyListeners() {
+    this.listeners.forEach(fn => {
+      try {
+        fn();
+      } catch (e) {
+        console.error('Erro ao notificar listener do dataService:', e);
+      }
+    });
+  }
+
+  public async pushStateToCloud(): Promise<boolean> {
+    try {
+      const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
+      await setDoc(stateDocRef, {
+        state: this.state,
+        updatedAt: new Date().toISOString(),
+        version: 'production_v1'
+      });
+      this.cloudSyncStatus = {
+        connected: true,
+        lastSync: new Date().toISOString(),
+        databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+      };
+      return true;
+    } catch (err: any) {
+      console.warn('Erro ao enviar estado para a nuvem Firestore:', err.message);
+      this.cloudSyncStatus.connected = false;
+      this.cloudSyncStatus.error = err.message;
+      return false;
+    }
+  }
+
+  public async pullStateFromCloud(): Promise<boolean> {
+    try {
+      const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
+      const snap = await getDoc(stateDocRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && data.state) {
+          this.isSyncingFromCloud = true;
+          this.state = data.state;
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+          } catch (e) {
+            // ignore
+          }
+          this.isSyncingFromCloud = false;
+          this.cloudSyncStatus = {
+            connected: true,
+            lastSync: new Date().toISOString(),
+            databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+          };
+          this.notifyListeners();
+          return true;
+        }
+      }
+      return false;
+    } catch (err: any) {
+      console.warn('Erro ao puxar dados da nuvem Firestore:', err.message);
+      this.cloudSyncStatus.connected = false;
+      this.cloudSyncStatus.error = err.message;
+      return false;
+    }
+  }
+
+  public getCloudSyncStatus() {
+    return { ...this.cloudSyncStatus };
+  }
+
+  // ==========================================
+  // PREPARAÇÃO PARA PRODUÇÃO (GO-LIVE / CLEAN SLATE)
+  // ==========================================
+
+  public async prepareForProduction(
+    mode: 'TRANSACTIONAL_ONLY' | 'FACTORY_RESET',
+    currentUser: User
+  ): Promise<{ backupFileName: string; summary: string }> {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Apenas usuários com perfil Master têm autorização para preparar o sistema para produção.');
+    }
+
+    // 1. Gera e descarrega automaticamente o backup de segurança com TODOS os dados atuais
+    const backupJsonStr = this.exportDatabaseJSON('COMPLETO');
+    const timestampStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupFileName = `AlmoxPlus_Homologacao_Backup_${timestampStr}.json`;
+
+    if (typeof window !== 'undefined') {
+      try {
+        const blob = new Blob([backupJsonStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = backupFileName;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        console.warn('Não foi possível disparar download automático do backup:', e);
+      }
+    }
+
+    // 2. Executa a limpeza conforme o modo selecionado
+    if (mode === 'TRANSACTIONAL_ONLY') {
+      // Zera estoque em todas as filiais
+      const cleanProducts = this.state.products.map(p => {
+        const cleanStock: Record<string, number> = {};
+        const branches = this.state.branches.map(b => b.code);
+        branches.forEach(b => {
+          cleanStock[b] = 0;
+        });
+        return {
+          ...p,
+          stockByBranch: cleanStock,
+          batches: []
+        };
+      });
+
+      // Zera gasto dos centros de custo mantendo o orçamento aprovado
+      const cleanCostCenters = this.state.costCenters.map(cc => ({
+        ...cc,
+        spent: 0
+      }));
+
+      this.state.products = cleanProducts;
+      this.state.costCenters = cleanCostCenters;
+      this.state.movements = [];
+      this.state.transfers = [];
+      this.state.requisitions = [];
+      this.state.purchaseRequests = [];
+      this.state.purchaseOrders = [];
+      this.state.inventories = [];
+      this.state.notifications = [];
+      
+      const prodAuditLog: AuditLog = {
+        id: `log-prod-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userEmail: currentUser.email,
+        operation: 'CRIAR',
+        module: 'Governança & Produção',
+        previousValue: 'Ambiente de Testes / Homologação',
+        newValue: 'Ambiente de Produção Ativo (Marco Zero Transacional)',
+        branch: 'GLOBAL',
+        timestamp: new Date().toISOString(),
+        ip: '127.0.0.1 (Painel Master)',
+        details: `Preparação para produção concluída com sucesso. Estoques de todos os ${cleanProducts.length} produtos zerados e transações de teste purgadas. Backup de segurança salvo como ${backupFileName}.`
+      };
+      this.state.auditLogs = [prodAuditLog];
+
+    } else {
+      // FACTORY_RESET (Limpeza Completa)
+      this.state.products = [];
+      this.state.movements = [];
+      this.state.transfers = [];
+      this.state.requisitions = [];
+      this.state.purchaseRequests = [];
+      this.state.purchaseOrders = [];
+      this.state.inventories = [];
+      this.state.assets = [];
+      this.state.notifications = [];
+      this.state.costCenters = this.state.costCenters.map(cc => ({ ...cc, spent: 0 }));
+
+      const prodAuditLog: AuditLog = {
+        id: `log-prod-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userEmail: currentUser.email,
+        operation: 'CRIAR',
+        module: 'Governança & Produção',
+        previousValue: 'Ambiente de Testes',
+        newValue: 'Ambiente de Produção (Limpeza de Fábrica Total)',
+        branch: 'GLOBAL',
+        timestamp: new Date().toISOString(),
+        ip: '127.0.0.1 (Painel Master)',
+        details: `Limpeza de fábrica concluída. Banco pronto para novo cadastramento do zero. Backup prévio salvo como ${backupFileName}.`
+      };
+      this.state.auditLogs = [prodAuditLog];
+    }
+
+    // 3. Salva no localStorage e força envio imediato para o Firestore
+    this.saveState(undefined, true);
+    await this.pushStateToCloud();
+    this.notifyListeners();
+
+    return {
+      backupFileName,
+      summary: mode === 'TRANSACTIONAL_ONLY'
+        ? `Estoques zerados (0) em todas as filiais e transações de teste purgadas. Cadastro de produtos (${this.state.products.length} itens), 4 unidades e usuários preservados.`
+        : 'Banco de dados 100% zerado no padrão de fábrica para cadastramento novo.'
+    };
   }
 
   public getState(): AppState {

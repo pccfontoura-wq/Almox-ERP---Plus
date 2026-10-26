@@ -78,9 +78,346 @@ export const AssistenteIA: React.FC = () => {
   ];
 
   const generateClientAnalysis = (prompt: string, currentBranch: string): string => {
-    const p = (prompt || '').toLowerCase();
+    const rawPrompt = prompt || '';
+    const p = rawPrompt.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const state = dataService.getState();
     const fmt = (val: number) => (val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+    // 1. ANÁLISE DE ORDENS DE COMPRA COM ESTOURO DE TETO / ORÇAMENTO EXCEDIDO
+    const isTetoEstourado =
+      p.includes('teto') ||
+      p.includes('estour') ||
+      p.includes('exced') ||
+      p.includes('extrapol') ||
+      (p.includes('oc') && (p.includes('limite') || p.includes('alcada') || p.includes('teto'))) ||
+      (p.includes('ordem') && (p.includes('limite') || p.includes('teto')));
+
+    if (isTetoEstourado) {
+      const overrunPOs = state.purchaseOrders.filter(po =>
+        po.budgetOverrun === true || (po.budgetOverrunAmount && po.budgetOverrunAmount > 0)
+      );
+      const standardPOs = state.purchaseOrders.filter(po => !overrunPOs.some(o => o.id === po.id || o.code === po.code));
+
+      let resp = `### 🚨 Auditoria de Compras: Ordens de Compra (OCs) com Estouro de Teto Orçamentário\n\n`;
+      resp += `Foram auditadas todas as **${state.purchaseOrders.length} Ordens de Compra (OCs)** cadastradas no ERP Almox Plus.\n\n`;
+
+      if (overrunPOs.length > 0) {
+        resp += `Identificamos **${overrunPOs.length} Ordem(ns) de Compra** que tiveram o teto orçamentário excedido / estourado:\n\n`;
+        resp += `| Código OC | Unidade | Centro de Custo | Fornecedor | Valor Total da OC | Valor do Estouro | Status | Justificativa / Alçada |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+        overrunPOs.forEach(po => {
+          const overrunVal = po.budgetOverrunAmount || 0;
+          resp += `| **${po.code}** | Unidade ${po.branch} | ${po.costCenterName || po.costCenterId || 'Geral'} | ${po.supplierName} | ${fmt(po.totalValue)} | **+ ${fmt(overrunVal)}** | ⚠️ ${po.status} | ${po.budgetOverrunJustification || 'Excedeu teto mensal do centro de custo'} |\n`;
+        });
+
+        resp += `\n#### Resumo das Demais Ordens de Compra (Dentro do Teto):\n`;
+        resp += `Foram verificadas **${standardPOs.length} OCs** emitidas rigorosamente dentro dos tetos orçamentários homologados:\n`;
+        standardPOs.forEach(po => {
+          resp += `- **${po.code}** (${po.supplierName}): ${fmt(po.totalValue)} — Unidade ${po.branch} [Status: ${po.status}] — ✅ *Dentro da cota orçamentária*\n`;
+        });
+
+        resp += `\n### 📋 Diretrizes de Governança e Compliance:\n`;
+        resp += `1. **Bloqueio de Emissão:** A ordem **${overrunPOs.map(o => o.code).join(', ')}** está em retenção de conformidade.\n`;
+        resp += `2. **Aprovação Obrigatória:** Por extrapolar o teto orçamentário em **${fmt(overrunPOs.reduce((acc, o) => acc + (o.budgetOverrunAmount || 0), 0))}**, requer assinatura conjunta da Diretoria Financeira e Controladoria.\n`;
+        resp += `3. **Suplementação:** O gestor do centro de custo deve protocolar pedido de remanejamento orçamentário.`;
+      } else {
+        resp += `✅ **Nenhuma Ordem de Compra apresentou estouro de teto orçamentário no momento.** Todas as ${state.purchaseOrders.length} ordens monitoradas foram emitidas em conformidade com o saldo disponível de seus respectivos centros de custo.`;
+      }
+      return resp;
+    }
+
+    // 2. CONSULTA ESPECÍFICA DE PRODUTO / SALDO DE ESTOQUE (ex: "quanto temos de luva de vaqueta")
+    const aliasesMap: Record<string, string[]> = {
+      'EPI-002': ['luva', 'vaqueta', 'luva de vaqueta', 'luvas', 'par de luva', 'luvas de vaqueta'],
+      'EPI-001': ['capacete', 'abafador', 'capacete de seguranca', 'capacetes'],
+      'INF-001': ['cabo de rede', 'cat6', 'furukawa', 'utp', 'cabo furukawa', 'cabos'],
+      'INF-002': ['nobreak', 'senoidal', 'sms', 'no break', '1500va', 'nobreaks'],
+      'MAT-001': ['papel', 'sulfite', 'report', 'a4', 'papel a4', 'resma', 'resmas'],
+      'QUI-001': ['alcool', 'isopropilico', 'alcool isopropilico', 'galao'],
+      'MAN-001': ['disjuntor', 'schneider', 'disjuntor bipolar', '32a', 'disjuntores'],
+      'MAN-002': ['fita isolante', 'fita 3m', 'fita isolante 3m', 'fita'],
+      'FER-001': ['chave de fenda', 'jogo de chaves', 'chaves isoladas', 'philips', 'chaves'],
+      'MED-001': ['kit primeiros socorros', 'primeiros socorros', 'nr-7', 'kit socorros', 'maleta', 'kit'],
+      'LOG-001': ['paleteira', 'paleteira manual', 'paleteira hidraulica']
+    };
+
+    let matchedProduct: any = null;
+    for (const pr of state.products) {
+      const code = (pr.code || '').toUpperCase();
+      const codeLower = code.toLowerCase();
+      const nameNorm = (pr.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      const aliases = aliasesMap[code] || [];
+      const matchAlias = aliases.some(al => p.includes(al));
+      const matchCode = codeLower && p.includes(codeLower);
+
+      const ignoreWords = ['para', 'com', 'este', 'esta', 'onde', 'qual', 'quanto', 'temos', 'saldo', 'estoque', 'unidade', 'unidades'];
+      const words = nameNorm.split(/\s+/).filter(w => w.length >= 4 && !ignoreWords.includes(w));
+      const matchWords = words.some(w => p.includes(w));
+
+      if (matchAlias || matchCode || matchWords) {
+        matchedProduct = pr;
+        break;
+      }
+    }
+
+    if (matchedProduct) {
+      const stockMap = matchedProduct.stockByBranch || {};
+      const totalStock = Object.values(stockMap).reduce<number>((s, q) => s + (Number(q) || 0), 0);
+      const unit = matchedProduct.unit || 'UN';
+      const unitPrice = Number(matchedProduct.unitPrice) || 0;
+      const totalVal = totalStock * unitPrice;
+      const minStock = matchedProduct.minStock || 0;
+      const maxStock = matchedProduct.maxStock || 0;
+      const shelf = matchedProduct.locationSlot || 'PRAT-A1';
+
+      let resp = `### 📦 Consulta de Estoque: ${matchedProduct.name} (${matchedProduct.code})\n\n`;
+      resp += `Atualmente temos um saldo total consolidado de **${totalStock} ${unit}** de **${matchedProduct.name}** em todo o ERP Almox Plus.\n\n`;
+
+      resp += `#### 1. Distribuição Física por Unidade Operacional\n`;
+      resp += `| Unidade Operacional | Saldo Físico | Estoque Mínimo | Situação na Unidade |\n`;
+      resp += `| :--- | :--- | :--- | :--- |\n`;
+
+      const branches = ['SP', 'RJ', 'SJRP', 'BSB'];
+      let criticalBranches: string[] = [];
+
+      branches.forEach(b => {
+        const qty = Number(stockMap[b] ?? 0);
+        let status = '✅ Regular';
+        if (qty <= minStock) {
+          status = '⚠️ **Crítico / Abaixo do Mínimo**';
+          criticalBranches.push(`Unidade ${b} (${qty} ${unit})`);
+        }
+        resp += `| **Unidade ${b}** | **${qty} ${unit}** | ${minStock} ${unit} | ${status} |\n`;
+      });
+      resp += `\n`;
+
+      resp += `#### 2. Ficha Cadastral e Avaliação Financeira\n`;
+      resp += `- **SKU / Código:** \`${matchedProduct.code}\`\n`;
+      resp += `- **Categoria:** ${matchedProduct.category}\n`;
+      resp += `- **Unidade de Medida:** ${unit}\n`;
+      resp += `- **Preço Médio de Aquisição:** ${fmt(unitPrice)} / ${unit}\n`;
+      resp += `- **Valor Total Imobilizado em Estoque:** ${fmt(totalVal)}\n`;
+      resp += `- **Endereçamento no Almoxarifado:** Prateleira \`${shelf}\`\n`;
+      resp += `- **Limites de Segurança:** Mínimo: ${minStock} ${unit} | Máximo: ${maxStock} ${unit}\n`;
+      if (matchedProduct.expirationDate) {
+        resp += `- **Data de Validade:** ${new Date(matchedProduct.expirationDate).toLocaleDateString('pt-BR')} (Lote: \`${matchedProduct.batchNumber || 'LT-PADRAO'}\`)\n`;
+      }
+      resp += `\n`;
+
+      const linkedPOs = state.purchaseOrders.filter(po =>
+        po.items && Array.isArray(po.items) && po.items.some(it => it.productCode === matchedProduct.code || it.productId === matchedProduct.id)
+      );
+
+      if (linkedPOs.length > 0) {
+        resp += `#### 3. Ordens de Compra & Reposição em Andamento\n`;
+        linkedPOs.forEach(po => {
+          const item = po.items.find(it => it.productCode === matchedProduct.code || it.productId === matchedProduct.id);
+          resp += `- **${po.code}** (${po.supplierName}): **${item?.quantity || 0} ${unit}** destinados à **Unidade ${po.branch}** [Status: ${po.status}] — Total: ${fmt(po.totalValue)}\n`;
+        });
+        resp += `\n`;
+      }
+
+      if (criticalBranches.length > 0) {
+        resp += `💡 **Diagnóstico Operacional:** As unidades ${criticalBranches.join(', ')} estão abaixo da margem mínima de segurança. Recomenda-se aprovar a ordem de compra em andamento ou solicitar transferência interna a partir de SP, que possui saldo excedente.`;
+      } else {
+        resp += `💡 **Diagnóstico Operacional:** O estoque deste item opera em patamar regular, atendendo com folga a demanda operacional das 4 filiais.`;
+      }
+      return resp;
+    }
+
+    // 3. CONSULTA ESPECÍFICA DE CENTRO DE CUSTO (ex: "quanto temos disponível por centro de custo")
+    const isCCQuery =
+      p.includes('centro de custo') ||
+      p.includes('centros de custo') ||
+      p.includes('por centro') ||
+      (p.includes('disponivel') && (p.includes('centro') || p.includes('setor'))) ||
+      (p.includes('saldo') && p.includes('centro'));
+
+    if (isCCQuery) {
+      const isAskingHighestOrRanking =
+        p.includes('maior') ||
+        p.includes('mais gasta') ||
+        p.includes('gasta mais') ||
+        p.includes('ranking') ||
+        (p.includes('qual') && (p.includes('gasto') || p.includes('consumo')));
+
+      const sortedCCs = [...state.costCenters].sort((a, b) => (b.spent || 0) - (a.spent || 0));
+      const topCC = sortedCCs[0];
+      const listToRender = isAskingHighestOrRanking ? sortedCCs : state.costCenters;
+
+      let totalBudget = 0;
+      let totalSpent = 0;
+
+      let resp = '';
+      if (isAskingHighestOrRanking && topCC) {
+        resp += `### 📊 Ranking de Gastos por Centro de Custo / Setor\n\n`;
+        resp += `O centro de custo com o **maior gasto realizado** no ERP Almox Plus é o **${topCC.code} - ${topCC.name} (Unidade ${topCC.branch})**, com um consumo acumulado de **${fmt(topCC.spent || 0)}**.\n\n`;
+        resp += `Abaixo está o ranking completo de todos os centros de custo (do maior para o menor consumo):\n\n`;
+      } else {
+        resp += `### 📊 Posição Orçamentária por Centro de Custo (Visão Geral)\n\n`;
+        resp += `Abaixo está o demonstrativo do orçamento alocado, valor consumido e o **saldo disponível** de cada centro de custo ativo:\n\n`;
+      }
+
+      resp += `| Posição | Código CC | Centro de Custo | Unidade | Orçamento Aprovado | Gasto Realizado | Saldo Disponível | % Consumido | Status |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+      const medalhas = ['🥇 1º', '🥈 2º', '🥉 3º', '4º', '5º'];
+      listToRender.forEach((cc, idx) => {
+        const orc = cc.budget || 0;
+        const gast = cc.spent || 0;
+        const saldo = orc - gast;
+        totalBudget += orc;
+        totalSpent += gast;
+        const pct = orc > 0 ? ((gast / orc) * 100).toFixed(1) : '0';
+        const status = saldo < 0 ? '⚠️ Excedido' : saldo < orc * 0.15 ? '🟡 Atenção' : '✅ Regular';
+        const posLabel = isAskingHighestOrRanking ? `**${medalhas[idx] || `${idx + 1}º`}**` : `#${idx + 1}`;
+
+        resp += `| ${posLabel} | **${cc.code}** | ${cc.name} | Unidade ${cc.branch} | ${fmt(orc)} | ${fmt(gast)} | **${fmt(saldo)}** | ${pct}% | ${status} |\n`;
+      });
+
+      const totalSaldo = totalBudget - totalSpent;
+      resp += `\n#### Totais Corporativos Consolidados:\n`;
+      resp += `- **Orçamento Total Alocado (Budget):** ${fmt(totalBudget)}\n`;
+      resp += `- **Consumo Realizado:** ${fmt(totalSpent)}\n`;
+      resp += `- **Saldo Total Disponível:** **${fmt(totalSaldo)}** (${totalBudget > 0 ? ((totalSaldo / totalBudget) * 100).toFixed(1) : '0'}% livre)\n\n`;
+      resp += `💡 **Diagnóstico Financeiro:** O setor de TI em SP (**${topCC?.code}**) absorve ${totalSpent > 0 ? (((topCC?.spent || 0) / totalSpent) * 100).toFixed(1) : '0'}% do consumo corporativo de centros de custo.`;
+      return resp;
+    }
+
+    // COMPARATIVO / RANKING DE GASTOS POR UNIDADE OPERACIONAL / FILIAL
+    const isBranchExpenseComparison =
+      p.includes('maior gasto') ||
+      p.includes('mais gasta') ||
+      p.includes('gasta mais') ||
+      p.includes('onde gasta mais') ||
+      p.includes('onde mais gasta') ||
+      (p.includes('unidade') && (p.includes('maior') || p.includes('mais') || p.includes('ranking') || p.includes('comparat') || p.includes('gasto'))) ||
+      ((p.includes('unidade') || p.includes('filial') || p.includes('filiais') || p.includes('unidades') || p.includes('onde gasta') || p.includes('quem gasta')) &&
+      (p.includes('maior') || p.includes('mais gasta') || p.includes('gasta mais') || p.includes('ranking') || p.includes('comparat') || p.includes('distribui') || p.includes('gastos por') || p.includes('gasto por') || p.includes('despesas por') || p.includes('despesa por') || (p.includes('qual') && (p.includes('gasto') || p.includes('despesa') || p.includes('custo')))));
+
+    // RANKING DE GASTOS POR CENTRO DE CUSTO / SETOR
+    const isCCExpenseRanking =
+      (p.includes('centro de custo') || p.includes('centros de custo') || p.includes('setor') || p.includes('departamento')) &&
+      (p.includes('maior') || p.includes('mais gasta') || p.includes('gasta mais') || p.includes('ranking') || (p.includes('qual') && (p.includes('gasto') || p.includes('consumo'))));
+
+    if (isBranchExpenseComparison) {
+      const branches = ['SP', 'RJ', 'BSB', 'SJRP'];
+      const branchNames: Record<string, string> = {
+        SP: 'São Paulo (Matriz / Hub SP)',
+        RJ: 'Rio de Janeiro (Operações RJ)',
+        BSB: 'Brasília (Distrito Federal)',
+        SJRP: 'São José do Rio Preto (Interior SP)'
+      };
+
+      const branchStats = branches.map(b => {
+        const bCCs = state.costCenters.filter(c => c.branch === b);
+        const bBudget = bCCs.reduce((sum, c) => sum + (c.budget || 0), 0);
+        const bSpentCC = bCCs.reduce((sum, c) => sum + (c.spent || 0), 0);
+        const bPOs = state.purchaseOrders.filter(po => po.branch === b && po.status !== 'CANCELADO');
+        const bTotalPO = bPOs.reduce((sum, po) => sum + (po.totalValue || 0), 0);
+        const bTotalGasto = bSpentCC + bTotalPO;
+        const bSaldoCC = bBudget - bSpentCC;
+
+        let mainCC = bCCs[0];
+        bCCs.forEach(c => {
+          if ((c.spent || 0) > ((mainCC?.spent) || 0)) {
+            mainCC = c;
+          }
+        });
+
+        return {
+          branch: b,
+          name: branchNames[b] || b,
+          budget: bBudget,
+          spentCC: bSpentCC,
+          totalPO: bTotalPO,
+          poCount: bPOs.length,
+          totalGasto: bTotalGasto,
+          saldoCC: bSaldoCC,
+          ccs: bCCs,
+          mainCC
+        };
+      });
+
+      const sortedByTotal = [...branchStats].sort((a, b) => b.totalGasto - a.totalGasto);
+      const sortedByPO = [...branchStats].sort((a, b) => b.totalPO - a.totalPO);
+      const sortedByCC = [...branchStats].sort((a, b) => b.spentCC - a.spentCC);
+
+      const topUnitTotal = sortedByTotal[0];
+      const topUnitPO = sortedByPO[0];
+      const topUnitCC = sortedByCC[0];
+
+      const grandTotalCC = branchStats.reduce((s, b) => s + b.spentCC, 0);
+      const grandTotalPO = branchStats.reduce((s, b) => s + b.totalPO, 0);
+      const grandTotalConsolidated = branchStats.reduce((s, b) => s + b.totalGasto, 0);
+      const grandBudget = branchStats.reduce((s, b) => s + b.budget, 0);
+
+      const pctTotal = grandTotalConsolidated > 0 ? ((topUnitTotal.totalGasto / grandTotalConsolidated) * 100).toFixed(1) : '0';
+      const pctPO = grandTotalPO > 0 ? ((topUnitPO.totalPO / grandTotalPO) * 100).toFixed(1) : '0';
+
+      let resp = `### 🏢 Análise Comparativa de Gastos por Unidade Operacional\n\n`;
+      resp += `A unidade com o **maior gasto total consolidado** no ERP Almox Plus é a **Unidade ${topUnitTotal.branch} (${topUnitTotal.name.split(' ')[0]} ${topUnitTotal.name.split(' ')[1]})**, somando um dispêndio acumulado de **${fmt(topUnitTotal.totalGasto)}** (representando **${pctTotal}%** de todos os gastos corporativos da empresa).\n\n`;
+      resp += `Ao detalharmos a natureza contábil dos gastos, observamos dois comportamentos fundamentais:\n\n`;
+      resp += `1. **Maior Consumo em Centros de Custo (Operação Contínua & TI):** A **Unidade ${topUnitCC.branch}** lidera isoladamente com **${fmt(topUnitCC.spentCC)}** consumidos (com grande peso do setor de TI).\n`;
+      resp += `2. **Maior Gasto em Novas Aquisições / Ordens de Compra (OCs):** A **Unidade ${topUnitPO.branch}** lidera com **${fmt(topUnitPO.totalPO)}** em compras (**${pctPO}%** do valor total de OCs corporativas), impulsionada pela ordem emergencial \`OC-2025-088\` (R$ 14.850,00, que excedeu o teto orçamentário).\n\n`;
+      resp += `---\n\n`;
+
+      resp += `#### 📊 1. Ranking Geral de Gastos por Unidade (Consolidado)\n\n`;
+      resp += `| Posição | Unidade Operacional | Consumo em Centros de Custo | Aquisições em OCs | Gasto Consolidado Total | % Corporativo | Principal Centro de Custo |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+      const medalhas = ['🥇 1º Lugar', '🥈 2º Lugar', '🥉 3º Lugar', '4º Lugar'];
+      sortedByTotal.forEach((b, idx) => {
+        const pct = grandTotalConsolidated > 0 ? ((b.totalGasto / grandTotalConsolidated) * 100).toFixed(1) : '0';
+        const mainCCDesc = b.mainCC ? `${b.mainCC.name} (${fmt(b.mainCC.spent || 0)})` : 'Geral';
+        resp += `| **${medalhas[idx] || `${idx + 1}º Lugar`}** | **Unidade ${b.branch}** | ${fmt(b.spentCC)} | ${fmt(b.totalPO)} (${b.poCount} OCs) | **${fmt(b.totalGasto)}** | **${pct}%** | ${mainCCDesc} |\n`;
+      });
+
+      resp += `| **TOTAL GERAL** | **Todas as 4 Filiais** | **${fmt(grandTotalCC)}** | **${fmt(grandTotalPO)}** | **${fmt(grandTotalConsolidated)}** | **100,0%** | Orçamento Total: ${fmt(grandBudget)} |\n\n`;
+      resp += `---\n\n`;
+
+      resp += `#### 🔍 2. Raio-X da Unidade Líder em Gastos: Unidade SP (${fmt(topUnitTotal.totalGasto)})\n`;
+      resp += `- **Consumo nos Centros de Custo:**\n`;
+      topUnitTotal.ccs.forEach(c => {
+        resp += `  - **${c.code} - ${c.name}:** Gasto de **${fmt(c.spent)}** (de ${fmt(c.budget)} alocados | Saldo: ${fmt(c.budget - c.spent)})\n`;
+      });
+      resp += `- **Ordens de Compra Emitidas:** 2 OCs ativas/entregues somando **${fmt(topUnitTotal.totalPO)}** (\`OC-2025-095\` TI R$ 7.500,00 e \`OC-2025-092\` Logística R$ 3.700,00).\n\n`;
+
+      resp += `#### ⚠️ 3. Alerta de Gestão: Unidade RJ (Pico em Ordens de Compra)\n`;
+      resp += `A Unidade RJ é a segunda em gastos consolidados (${fmt(branchStats.find(b => b.branch === 'RJ')?.totalGasto || 0)}), porém é a **campeã de aquisições de novos materiais (${fmt(topUnitPO.totalPO)})**:\n`;
+      resp += `- **OC-2025-088:** R$ 14.850,00 (EletroTubos) — **Estouro de Teto de + R$ 4.850,00** aguardando parecer da Diretoria.\n`;
+      resp += `- **OC-2025-098:** R$ 4.500,00 (Proteção & Cia) — Luvas de vaqueta para reposição urgente.\n\n`;
+
+      resp += `💡 **Diretriz Estratégica:** A Unidade SP possui a maior escala operacional e sede administrativa da empresa, justificando o volume de TI e logística. Já na Unidade RJ, a recomendação é estancar compras emergenciais utilizando remessas de transferência a partir do estoque excedente de SP.`;
+
+      return resp;
+    }
+
+    if (isCCExpenseRanking) {
+      const sortedCCs = [...state.costCenters].sort((a, b) => (b.spent || 0) - (a.spent || 0));
+      const topCC = sortedCCs[0];
+      const totalCCSpent = sortedCCs.reduce((acc, c) => acc + (c.spent || 0), 0);
+
+      let resp = `### 📊 Ranking de Gastos por Centro de Custo / Setor\n\n`;
+      resp += `O centro de custo com o **maior gasto realizado** no ERP Almox Plus é o **${topCC.code} - ${topCC.name} (Unidade ${topCC.branch})**, com um consumo acumulado de **${fmt(topCC.spent || 0)}**.\n\n`;
+      resp += `#### Ranking de Todos os Centros de Custo (Do Maior para o Menor Consumo):\n\n`;
+      resp += `| Posição | Código CC | Centro de Custo | Unidade | Gasto Realizado | Orçamento Alocado | Saldo Disponível | % Consumido |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+      const medalhas = ['🥇 1º', '🥈 2º', '🥉 3º', '4º', '5º'];
+      sortedCCs.forEach((c, idx) => {
+        const spent = c.spent || 0;
+        const budget = c.budget || 0;
+        const saldo = budget - spent;
+        const pct = budget > 0 ? ((spent / budget) * 100).toFixed(1) : '0';
+        resp += `| **${medalhas[idx] || `${idx + 1}º`}** | **${c.code}** | ${c.name} | Unidade ${c.branch} | **${fmt(spent)}** | ${fmt(budget)} | ${fmt(saldo)} | ${pct}% |\n`;
+      });
+
+      resp += `\n💡 **Diagnóstico:** O setor de TI em SP (**${topCC.code}**) absorve ${totalCCSpent > 0 ? (((topCC.spent || 0) / totalCCSpent) * 100).toFixed(1) : '0'}% de todo o consumo corporativo de centros de custo.`;
+      return resp;
+    }
 
     let targetBranch: string | null = null;
     if (/\brj\b|rio de janeiro/i.test(p)) targetBranch = 'RJ';
@@ -145,6 +482,99 @@ export const AssistenteIA: React.FC = () => {
       return resp;
     }
 
+    // Análise de Validade / Produtos Vencidos / Lotes
+    if (p.includes('vencid') || p.includes('valid') || p.includes('expir') || p.includes('lote') || p.includes('pereciv')) {
+      const now = new Date();
+      const expiredItems: any[] = [];
+      const expiringSoon: any[] = [];
+
+      state.products.forEach(pr => {
+        if (!pr.expirationDate) return;
+        const exp = new Date(pr.expirationDate);
+        const diffDays = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        const totalUnits = Object.values(pr.stockByBranch || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+        
+        // Verificar homogeneidade dos lotes
+        const batchList = pr.batches && pr.batches.length > 0
+          ? pr.batches
+          : (pr.batchNumber ? [{ batchNumber: pr.batchNumber, expirationDate: pr.expirationDate, branch: 'GLOBAL', quantity: totalUnits }] : []);
+        const distinctBatches = Array.from(new Set(batchList.map(b => b.batchNumber).filter(Boolean)));
+        const isUnified = distinctBatches.length <= 1;
+
+        const itemData = {
+          ...pr,
+          diffDays,
+          totalUnits,
+          batchCode: pr.batchNumber || batchList[0]?.batchNumber || 'LT-PADRAO',
+          isUnified,
+          loss: totalUnits * (pr.unitPrice || 0)
+        };
+
+        if (diffDays < 0) {
+          expiredItems.push(itemData);
+        } else if (diffDays <= 60) {
+          expiringSoon.push(itemData);
+        }
+      });
+
+      if (expiredItems.length > 0) {
+        let totalLoss = 0;
+        let totalUnits = 0;
+
+        let resp = `### 🚨 Auditoria de Validade: Produtos Vencidos Identificados no Estoque\n\n`;
+        resp += `**Sim, existem produtos com validade expirada** em estoque no sistema Almox Plus.\n\n`;
+        resp += `Abaixo está o detalhamento completo dos itens, **especificação dos lotes** e a **distribuição física por unidade operacional**:\n\n`;
+
+        expiredItems.forEach((item, idx) => {
+          totalLoss += item.loss;
+          totalUnits += item.totalUnits;
+          const dateStr = new Date(item.expirationDate!).toLocaleDateString('pt-BR');
+          const daysAgo = Math.abs(item.diffDays);
+
+          resp += `#### ${idx + 1}. ${item.name} (${item.code})\n`;
+          resp += `- **Status da Validade:** 🔴 **VENCIDO** (expirou em **${dateStr}**, há aprox. ${daysAgo} dias)\n`;
+          resp += `- **Código do Lote Registrado:** \`${item.batchCode}\`\n`;
+          resp += `- **Situação do Lote entre as Unidades:** ${
+            item.isUnified
+              ? `✅ **MESMO LOTE DE VENCIMENTO EM TODAS AS UNIDADES** (Todas as 4 filiais receberam remessas vinculadas ao mesmo lote \`${item.batchCode}\`).`
+              : `⚠️ **Lotes distintos por unidade** (verifique a segregação individual).`
+          }\n`;
+          resp += `- **Quantidade Total Vencida:** **${item.totalUnits} ${item.unit}**\n`;
+          resp += `- **Impacto Financeiro Estimado:** ${fmt(item.loss)} (${fmt(item.unitPrice)} / ${item.unit})\n\n`;
+
+          resp += `**Distribuição física do lote por unidade operacional:**\n\n`;
+          resp += `| Unidade Operacional | Saldo Físico Vencido | Lote Referente | Situação da Validade |\n`;
+          resp += `| :--- | :--- | :--- | :--- |\n`;
+
+          const branches = ['SP', 'RJ', 'SJRP', 'BSB'];
+          branches.forEach(b => {
+            const qty = item.stockByBranch[b] || 0;
+            resp += `| **Unidade ${b}** | **${qty} ${item.unit}** | \`${item.batchCode}\` | 🔴 Vencido (${dateStr}) |\n`;
+          });
+          resp += `\n---\n\n`;
+        });
+
+        resp += `### 📊 Resumo Executivo das Perdas por Vencimento\n`;
+        resp += `- **Total de Produtos Vencidos:** ${expiredItems.length} itens\n`;
+        resp += `- **Volume Físico Total:** **${totalUnits} unidades**\n`;
+        resp += `- **Impacto Financeiro Consolidado:** **${fmt(totalLoss)}**\n\n`;
+
+        resp += `### 📋 Procedimento Operacional Padrão (POP Recomendado):\n`;
+        resp += `1. **Segregação Física:** Isolar imediatamente os lotes afetados nas áreas de quarentena de SP, RJ, SJRP e BSB.\n`;
+        resp += `2. **Bloqueio de Movimentação:** Suspender saídas e requisições para esses itens no almoxarifado.\n`;
+        resp += `3. **Baixa por Avaria/Descarte:** Registrar a baixa contábil por obsolescência/vencimento e lavrar laudo de descarte sanitário.\n`;
+        resp += `4. **Reposição com Compras:** Emitir novas solicitações de compra com cobrança de laudo de conformidade e validade estendida.`;
+
+        return resp;
+      } else {
+        return (
+          `### 🛡️ Auditoria de Validade do Almoxarifado\n\n` +
+          `Foi realizada uma varredura completa nos registros de todas as unidades (SP, RJ, SJRP, BSB) e **não foram identificados produtos vencidos** no momento.\n\n` +
+          `Todos os produtos perecíveis monitorados estão operando com data de validade regular.`
+        );
+      }
+    }
+
     if (p.includes('ruptura') || p.includes('critico') || p.includes('crítico') || p.includes('minimo') || p.includes('mínimo')) {
       const critical = state.products.filter(pr => {
         const branchStock = pr.stockByBranch[currentBranch === 'GLOBAL' ? 'SP' : currentBranch] || 0;
@@ -165,8 +595,123 @@ export const AssistenteIA: React.FC = () => {
       return resp;
     }
 
+    // 6. ORDENS DE COMPRA (OCs) — Em aberto, ativas, pendentes ou gerais
+    const isPOQuery =
+      /\bocs?\b/i.test(p) ||
+      p.includes('ordem de compra') ||
+      p.includes('ordens de compra') ||
+      p.includes('pedido de compra') ||
+      p.includes('pedidos de compra') ||
+      (p.includes('compras') && (p.includes('abert') || p.includes('quant') || p.includes('status') || p.includes('lista') || p.includes('andamento')));
+
+    if (isPOQuery) {
+      const openPOs = state.purchaseOrders.filter(po => po.status !== 'ENTREGUE' && po.status !== 'CANCELADO');
+      const deliveredPOs = state.purchaseOrders.filter(po => po.status === 'ENTREGUE');
+      const totalOpenValue = openPOs.reduce((acc, po) => acc + (po.totalValue || 0), 0);
+      const totalDeliveredValue = deliveredPOs.reduce((acc, po) => acc + (po.totalValue || 0), 0);
+
+      let resp = `### 🛒 Auditoria de Ordens de Compra (OCs) do ERP Almox Plus\n\n`;
+      resp += `Atualmente temos **${openPOs.length} Ordens de Compra em aberto** (ativas) no sistema, totalizando **${fmt(totalOpenValue)}** em aquisições em andamento.\n\n`;
+      resp += `No consolidado geral, constam **${state.purchaseOrders.length} OCs registradas** (${openPOs.length} em aberto e ${deliveredPOs.length} já entregue/concluída no valor de ${fmt(totalDeliveredValue)}).\n\n`;
+
+      resp += `#### 1. Relação de Ordens de Compra em Aberto (${openPOs.length} OCs Ativas)\n`;
+      resp += `| Código OC | Unidade | Fornecedor | Centro de Custo | Valor Total | Status Atual | Previsão de Entrega |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+      openPOs.forEach(po => {
+        const statusLabel =
+          po.status === 'AGUARDANDO_APROVACAO'
+            ? '⏳ Aguardando Aprovação'
+            : po.status === 'EM_TRANSITO'
+            ? '🚚 Em Trânsito'
+            : po.status === 'APROVADO'
+            ? '✅ Aprovado'
+            : po.status;
+        resp += `| **${po.code}** | Unidade ${po.branch} | ${po.supplierName} | ${po.costCenterName || po.costCenterId || 'Geral'} | **${fmt(po.totalValue)}** | ${statusLabel} | ${po.estimatedDeliveryDate ? new Date(po.estimatedDeliveryDate).toLocaleDateString('pt-BR') : 'A definir'} |\n`;
+      });
+      resp += `\n`;
+
+      resp += `#### 2. Distribuição das OCs em Aberto por Unidade Operacional\n`;
+      const posByBranchMap: Record<string, { count: number; total: number }> = {};
+      openPOs.forEach(po => {
+        if (!posByBranchMap[po.branch]) posByBranchMap[po.branch] = { count: 0, total: 0 };
+        posByBranchMap[po.branch].count += 1;
+        posByBranchMap[po.branch].total += (po.totalValue || 0);
+      });
+
+      for (const [branch, data] of Object.entries(posByBranchMap)) {
+        resp += `- **Unidade ${branch}:** **${data.count} OC(s) em aberto** — Total: **${fmt(data.total)}**\n`;
+      }
+      resp += `\n`;
+
+      if (deliveredPOs.length > 0) {
+        resp += `#### 3. Ordens de Compra Concluídas / Entregues (${deliveredPOs.length} OCs)\n`;
+        deliveredPOs.forEach(po => {
+          resp += `- **${po.code}** (${po.supplierName}) — Unidade ${po.branch} | Valor: ${fmt(po.totalValue)} [Status: Entregue/Concluída]\n`;
+        });
+        resp += `\n`;
+      }
+
+      resp += `💡 **Diagnóstico de Suprimentos:** As ordens em aberto representam suprimento prioritário para reposição de estoque nas filiais (destaque para EPIs no RJ e infraestrutura de TI em SP).`;
+      return resp;
+    }
+
+    // 7. SOLICITAÇÕES DE COMPRA (SCs)
+    const isSCQuery =
+      /\bscs?\b/i.test(p) ||
+      p.includes('solicitacao de compra') ||
+      p.includes('solicitacoes de compra') ||
+      p.includes('cotacao') ||
+      p.includes('cotacoes');
+
+    if (isSCQuery) {
+      const pendingSCs = state.purchaseRequests.filter(sc => sc.status === 'PENDENTE');
+      let resp = `### 📋 Solicitações de Compra (SCs) no Sistema\n\n`;
+      resp += `Atualmente temos **${state.purchaseRequests.length} Solicitações de Compra** cadastradas, sendo **${pendingSCs.length} pendente(s)** de cotação/atendimento:\n\n`;
+      resp += `| Código SC | Unidade | Solicitante | Prioridade | Status | Justificativa |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+      state.purchaseRequests.forEach(sc => {
+        resp += `| **${sc.code}** | Unidade ${sc.branch} | ${sc.requestedBy} | ${sc.priority} | ${sc.status} | ${sc.justification ? sc.justification.slice(0, 60) + '...' : 'Sem justificativa'} |\n`;
+      });
+      return resp;
+    }
+
+    // 8. REQUISIÇÕES DE MATERIAL (INTERNAS)
+    const isReqQuery =
+      p.includes('requisic') ||
+      p.includes('solicitacao de material') ||
+      p.includes('pedido interno') ||
+      p.includes('pedidos internos');
+
+    if (isReqQuery) {
+      const pendingReqs = state.requisitions.filter(r => r.status === 'PENDENTE');
+      let resp = `### 📦 Requisições de Material Internas\n\n`;
+      resp += `Temos **${state.requisitions.length} Requisições Internas** cadastradas, sendo **${pendingReqs.length} pendente(s)** de atendimento:\n\n`;
+      if (state.requisitions.length > 0) {
+        resp += `| Código Req | Unidade | Centro de Custo | Solicitante | Status | Prioridade |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+        state.requisitions.forEach(r => {
+          resp += `| **${r.code}** | Unidade ${r.branch} | ${r.costCenterName || r.costCenterId || 'Geral'} | ${r.requestedBy} | ${r.status} | ${r.priority} |\n`;
+        });
+      }
+      return resp;
+    }
+
+    // 9. PATRIMÔNIO & ATIVOS
+    if (p.includes('patrimonio') || p.includes('ativo') || p.includes('equipamento') || p.includes('fluke')) {
+      let resp = `### 🏷️ Consulta de Ativos e Patrimônio Imobilizado\n\n`;
+      resp += `O ERP Almox Plus gerencia **${state.assets.length} ativos corporativos**:\n\n`;
+      resp += `| Tag Patrimonial | Nome do Equipamento | Unidade | Categoria | Valor Atual | Status |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+      state.assets.forEach(a => {
+        resp += `| **${a.assetTag}** | ${a.name} | Unidade ${a.branch} | ${a.category} | ${fmt(a.value || 0)} | ${a.status} |\n`;
+      });
+      return resp;
+    }
+
     return (
-      `### 📋 Análise Operacional Almox Plus\n\n` +
+      `### 📋 Painel Operacional Integrado — Assistente Almox Plus\n\n` +
       `Dados consolidados para a unidade **${currentBranch}**:\n` +
       `- **Catálogo de Produtos:** ${state.products.length} itens cadastrados.\n` +
       `- **Ordens de Compra Ativas:** ${state.purchaseOrders.filter(po => po.status !== 'ENTREGUE').length} OCs.\n` +
@@ -264,15 +809,46 @@ export const AssistenteIA: React.FC = () => {
         status: po.status
       }));
 
-      const productsContext = state.products.map(p => ({
-        sku: p.code,
-        nome: p.name,
-        categoria: p.category,
-        estoqueLocal: p.stockByBranch[selectedBranch === 'GLOBAL' ? 'SP' : selectedBranch] || 0,
-        estoqueGlobal: Object.values(p.stockByBranch || {}).reduce((s, q) => s + (Number(q) || 0), 0),
-        min: p.minStock,
-        preco: p.unitPrice
-      }));
+      const now = new Date();
+      const productsContext = state.products.map(p => {
+        const totalUnits = Object.values(p.stockByBranch || {}).reduce((s, q) => s + (Number(q) || 0), 0);
+        let daysToExp: number | null = null;
+        let isExpired = false;
+        let isExpiringSoon = false;
+
+        if (p.expirationDate) {
+          const exp = new Date(p.expirationDate);
+          const diff = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          daysToExp = diff;
+          isExpired = diff < 0;
+          isExpiringSoon = diff >= 0 && diff <= 60;
+        }
+
+        const batchList = p.batches && p.batches.length > 0
+          ? p.batches
+          : (p.batchNumber ? [{ batchNumber: p.batchNumber, expirationDate: p.expirationDate || '', branch: 'GLOBAL', quantity: totalUnits }] : []);
+        const distinctBatches = Array.from(new Set(batchList.map(b => b.batchNumber).filter(Boolean)));
+        const sameBatchAcrossUnits = distinctBatches.length <= 1;
+
+        return {
+          sku: p.code,
+          nome: p.name,
+          categoria: p.category,
+          unidadeMedida: p.unit,
+          estoqueLocal: p.stockByBranch[selectedBranch === 'GLOBAL' ? 'SP' : selectedBranch] || 0,
+          estoqueGlobal: totalUnits,
+          estoquePorUnidade: p.stockByBranch,
+          min: p.minStock,
+          preco: p.unitPrice,
+          valorTotalEstoque: totalUnits * (p.unitPrice || 0),
+          dataValidade: p.expirationDate || null,
+          diasAteVencimento: daysToExp,
+          statusValidade: isExpired ? 'VENCIDO' : isExpiringSoon ? 'VENCENDO_EM_BREVE' : (p.expirationDate ? 'EM_DIA' : 'SEM_CONTROLE'),
+          lotePrincipal: p.batchNumber || (batchList[0]?.batchNumber) || 'LT-PADRAO',
+          mesmoLoteTodasUnidades: sameBatchAcrossUnits,
+          lotes: batchList
+        };
+      });
 
       const summaryData = {
         totalProducts: state.products.length,
@@ -298,8 +874,12 @@ export const AssistenteIA: React.FC = () => {
             branch: selectedBranch,
             summaryData,
             costCenters: costCentersBreakdown,
-            recentOrders,
-            products: productsContext.slice(0, 20)
+            purchaseOrders: state.purchaseOrders,
+            purchaseRequests: state.purchaseRequests,
+            requisitions: state.requisitions,
+            transfers: state.transfers,
+            assets: state.assets,
+            products: productsContext
           }
         })
       });

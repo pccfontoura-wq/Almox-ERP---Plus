@@ -4,13 +4,13 @@ import {
   DialogContent, DialogActions, TextField, MenuItem, Select, FormControl,
   InputLabel, Alert, Chip, Tabs, Tab, IconButton, Tooltip, Snackbar,
   FormControlLabel, Checkbox, InputAdornment, Switch, Table, TableHead,
-  TableRow, TableCell, TableBody
+  TableRow, TableCell, TableBody, Divider
 } from '@mui/material';
 import {
   Download, Upload, Edit3, Trash2, Eye, EyeOff, KeyRound, Lock, ShieldCheck,
   Database, Clock, Play, RotateCcw, CheckCircle2, FileSpreadsheet,
   HardDrive, ShieldAlert, Sparkles, CalendarClock, PackageCheck, ShoppingCart,
-  FileJson, RefreshCw, Info
+  FileJson, RefreshCw, Info, Cloud, Rocket, Laptop, Server, AlertOctagon
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -89,6 +89,66 @@ export const Administracao: React.FC = () => {
   // Relatório de Verificação de Integridade
   const [integrityReport, setIntegrityReport] = useState<ReturnType<typeof dataService.verifyDataIntegrity> | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+
+  // Estados para Preparação de Produção (Go-Live) e Nuvem Multi-Unidades
+  const [productionModalOpen, setProductionModalOpen] = useState(false);
+  const [productionMode, setProductionMode] = useState<'TRANSACTIONAL_ONLY' | 'FACTORY_RESET'>('TRANSACTIONAL_ONLY');
+  const [confirmationCode, setConfirmationCode] = useState('');
+  const [isProcessingProduction, setIsProcessingProduction] = useState(false);
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const cloudStatus = dataService.getCloudSyncStatus();
+
+  const handleForceCloudSync = async () => {
+    setCloudSyncing(true);
+    try {
+      const ok = await dataService.pushStateToCloud();
+      if (ok) {
+        setToastSeverity('success');
+        setToastMessage('Sincronização em nuvem Firestore realizada com sucesso! Todas as 4 unidades estão sincronizadas.');
+      } else {
+        setToastSeverity('warning');
+        setToastMessage('A sincronização local está ativa, mas a nuvem retornou pendência. Verifique a conexão.');
+      }
+    } catch (e: any) {
+      setToastSeverity('error');
+      setToastMessage(e.message || 'Erro ao sincronizar com a nuvem.');
+    } finally {
+      setCloudSyncing(false);
+      setRefreshTick(t => t + 1);
+    }
+  };
+
+  const handleExecuteProductionPreparation = async () => {
+    if (!currentUser || currentUser.role !== 'Master') {
+      setToastSeverity('error');
+      setToastMessage('Apenas usuários Master podem preparar o sistema para produção.');
+      return;
+    }
+
+    if (confirmationCode.trim().toUpperCase() !== 'PRODUCAO') {
+      setToastSeverity('error');
+      setToastMessage('Digite a palavra PRODUCAO em maiúsculas para confirmar a operação com segurança.');
+      return;
+    }
+
+    setIsProcessingProduction(true);
+    try {
+      const result = await dataService.prepareForProduction(productionMode, currentUser);
+      setProductionModalOpen(false);
+      setConfirmationCode('');
+      refreshData();
+      setRefreshTick(t => t + 1);
+      setToastSeverity('success');
+      setToastMessage(
+        `🎉 Sistema preparado para produção com sucesso! Backup baixado como "${result.backupFileName}". ${result.summary}`
+      );
+    } catch (e: any) {
+      setToastSeverity('error');
+      setToastMessage(e.message || 'Erro ao preparar para produção.');
+    } finally {
+      setIsProcessingProduction(false);
+    }
+  };
 
   const state = dataService.getState();
   const users = state.users;
@@ -587,6 +647,7 @@ export const Administracao: React.FC = () => {
           <Tab label="Logs Auditáveis de Operação" className="font-bold text-xs" />
           <Tab label="Rotina de Backup & Recuperação (Inventário e Compras)" className="font-bold text-xs" />
           <Tab label="Monitoramento, LGPD & APIs" className="font-bold text-xs" />
+          <Tab label="🚀 Preparação para Produção & Nuvem Multi-Unidades" className="font-bold text-xs text-emerald-600 dark:text-emerald-400" />
         </Tabs>
       </Box>
 
@@ -1384,6 +1445,234 @@ export const Administracao: React.FC = () => {
           </div>
         </div>
       )}
+
+      {currentTab === 5 && (
+        <div className="space-y-6">
+          {/* CARD 1: INFRAESTRUTURA EM NUVEM E SINCRONIZAÇÃO EM TEMPO REAL MULTI-UNIDADES */}
+          <Card className="rounded-2xl border border-emerald-300 dark:border-emerald-800/80 bg-gradient-to-br from-emerald-50/60 via-white to-teal-50/40 dark:from-emerald-950/20 dark:via-slate-900 dark:to-teal-950/20 p-6 shadow-sm space-y-4">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-emerald-600 dark:bg-emerald-500 text-white flex items-center justify-center shadow-md">
+                  <Cloud className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Typography variant="h6" className="font-extrabold text-slate-900 dark:text-white text-base">
+                      Sincronização em Nuvem Multi-Computadores Ativa
+                    </Typography>
+                    <Chip
+                      label={cloudStatus.connected ? "🟢 Nuvem Conectada" : "🟡 Modo Local / Nuvem Pendente"}
+                      size="small"
+                      color={cloudStatus.connected ? "success" : "warning"}
+                      className="font-bold text-[10px] h-5"
+                    />
+                  </div>
+                  <Typography variant="caption" className="text-slate-600 dark:text-slate-400 text-xs block">
+                    Banco Google Firestore: <strong className="font-mono text-emerald-700 dark:text-emerald-400">{cloudStatus.databaseId}</strong>
+                  </Typography>
+                </div>
+              </div>
+
+              <Button
+                variant="outlined"
+                color="success"
+                onClick={handleForceCloudSync}
+                disabled={cloudSyncing}
+                startIcon={<RefreshCw className={`w-4 h-4 ${cloudSyncing ? 'animate-spin' : ''}`} />}
+                className="font-bold text-xs capitalize rounded-xl"
+              >
+                {cloudSyncing ? 'Sincronizando...' : 'Forçar Sincronização em Nuvem Agora'}
+              </Button>
+            </div>
+
+            <Divider />
+
+            <Typography variant="body2" className="text-slate-700 dark:text-slate-300 text-xs leading-relaxed">
+              O ERP Almox Plus está configurado com <strong>replicação em tempo real via Firestore</strong>. Isso assegura que quando o cliente operar o sistema a partir de <strong>vários computadores simultaneamente em cidades diferentes</strong>, qualquer alteração (nova requisição, aprovação de OC, inventário ou saída de material) é refletida instantaneamente em todas as 4 unidades operacionais.
+            </Typography>
+
+            {/* UNIDADES CONECTADAS */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+              {[
+                { code: 'SP', name: 'São Paulo', role: 'Matriz / Hub SP' },
+                { code: 'RJ', name: 'Rio de Janeiro', role: 'Operações RJ' },
+                { code: 'BSB', name: 'Brasília', role: 'Centro-Oeste DF' },
+                { code: 'SJRP', name: 'São José do Rio Preto', role: 'Interior SP' }
+              ].map(u => (
+                <div key={u.code} className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1 shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-xs text-blue-600 dark:text-blue-400">Unidade {u.code}</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  </div>
+                  <div className="font-bold text-slate-800 dark:text-slate-200 text-xs truncate">{u.name}</div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400">{u.role}</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* CARD 2: PREPARAÇÃO PARA PRODUÇÃO (GO-LIVE / CLEAN SLATE) */}
+          <Card className="rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-5 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-xl bg-blue-600 dark:bg-blue-500 text-white flex items-center justify-center shadow-md">
+                <Rocket className="w-6 h-6" />
+              </div>
+              <div>
+                <Typography variant="h6" className="font-extrabold text-slate-900 dark:text-white text-base">
+                  Assistente de Preparação para Produção (Go-Live / Clean Slate)
+                </Typography>
+                <Typography variant="caption" className="text-slate-500 dark:text-slate-400 text-xs block">
+                  Transição oficial do ambiente de homologação/testes para o ambiente operacional do cliente.
+                </Typography>
+              </div>
+            </div>
+
+            <Alert severity="info" icon={<ShieldCheck className="w-5 h-5 text-blue-600" />} className="rounded-xl text-xs">
+              <div className="font-bold mb-0.5">🔒 Garantia de Proteção de Dados: Backup Automático Pré-Limpeza</div>
+              <div>
+                Ao acionar a preparação para produção, o sistema <strong>faz automaticamente o download de um arquivo JSON completo com todos os dados atuais</strong> (produtos, compras, centros de custo, movimentações e auditorias). Se um dia você quiser demonstrar os dados de teste novamente, basta usar o botão "Restaurar Backup" na aba ao lado e tudo volta em 2 segundos.
+              </div>
+            </Alert>
+
+            <div className="space-y-4">
+              <Typography variant="subtitle2" className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider">
+                Selecione a Modalidade de Entrada em Produção:
+              </Typography>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* OPÇÃO 1: LIMPEZA TRANSACIONAL */}
+                <div
+                  onClick={() => setProductionMode('TRANSACTIONAL_ONLY')}
+                  className={`cursor-pointer p-4 rounded-xl border-2 transition-all space-y-2 ${
+                    productionMode === 'TRANSACTIONAL_ONLY'
+                      ? 'border-blue-600 bg-blue-50/50 dark:bg-blue-950/30 shadow-xs'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-sm text-blue-700 dark:text-blue-400 flex items-center gap-1.5">
+                      <span>📦 Opção 1: Limpeza Transacional</span>
+                      <Chip label="Recomendada" color="primary" size="small" className="text-[9px] h-4 font-bold" />
+                    </span>
+                    <input
+                      type="radio"
+                      checked={productionMode === 'TRANSACTIONAL_ONLY'}
+                      onChange={() => setProductionMode('TRANSACTIONAL_ONLY')}
+                      className="w-4 h-4 text-blue-600"
+                    />
+                  </div>
+                  <Typography variant="body2" className="text-slate-600 dark:text-slate-300 text-xs leading-relaxed">
+                    Mantém a estrutura cadastrada e <strong>zera apenas a operação</strong> para início da contagem real.
+                  </Typography>
+                  <div className="pt-1 space-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                    <div className="text-emerald-600 dark:text-emerald-400 font-semibold">✅ Mantém: Catálogo de Produtos, 4 Unidades, Usuários/Senhas e Centros de Custo.</div>
+                    <div className="text-rose-600 dark:text-rose-400 font-semibold">🧹 Zera para 0: Estoque de todos os itens (saldo 0 em SP, RJ, BSB e SJRP).</div>
+                    <div className="text-rose-600 dark:text-rose-400 font-semibold">🧹 Purga: Movimentações de teste, Requisições, OCs, SCs e Inventários simulados.</div>
+                  </div>
+                </div>
+
+                {/* OPÇÃO 2: LIMPEZA COMPLETA DE FÁBRICA */}
+                <div
+                  onClick={() => setProductionMode('FACTORY_RESET')}
+                  className={`cursor-pointer p-4 rounded-xl border-2 transition-all space-y-2 ${
+                    productionMode === 'FACTORY_RESET'
+                      ? 'border-rose-600 bg-rose-50/50 dark:bg-rose-950/30 shadow-xs'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-sm text-rose-700 dark:text-rose-400">
+                      🏭 Opção 2: Limpeza de Fábrica (Zero Absoluto)
+                    </span>
+                    <input
+                      type="radio"
+                      checked={productionMode === 'FACTORY_RESET'}
+                      onChange={() => setProductionMode('FACTORY_RESET')}
+                      className="w-4 h-4 text-rose-600"
+                    />
+                  </div>
+                  <Typography variant="body2" className="text-slate-600 dark:text-slate-300 text-xs leading-relaxed">
+                    Zera completamente os produtos e a operação, deixando o banco pronto para cadastramento do zero.
+                  </Typography>
+                  <div className="pt-1 space-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                    <div className="text-emerald-600 dark:text-emerald-400 font-semibold">✅ Mantém: Apenas Administrador Master e as 4 Unidades Operacionais.</div>
+                    <div className="text-rose-600 dark:text-rose-400 font-semibold">🧹 Zera: Todo o catálogo de produtos e todos os registros de teste.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
+              <div className="text-xs text-slate-600 dark:text-slate-300">
+                Após confirmar, a base limpa será salva localmente e <strong>sincronizada imediatamente no Firestore</strong> para todos os computadores que o cliente usar.
+              </div>
+              <Button
+                variant="contained"
+                color={productionMode === 'TRANSACTIONAL_ONLY' ? 'primary' : 'error'}
+                onClick={() => setProductionModalOpen(true)}
+                disabled={currentUser?.role !== 'Master'}
+                startIcon={<Rocket className="w-4 h-4 text-white" />}
+                className="font-extrabold text-xs py-2.5 px-6 rounded-xl shrink-0"
+              >
+                Preparar Sistema para Produção
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMAÇÃO DE ENTRADA EM PRODUÇÃO COM TRAVA DE SEGURANÇA */}
+      <Dialog open={productionModalOpen} onClose={() => !isProcessingProduction && setProductionModalOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle className="font-extrabold flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white">
+          <AlertOctagon className="w-5 h-5 text-amber-500" />
+          Confirmar Preparação para Produção (Go-Live)
+        </DialogTitle>
+        <DialogContent dividers className="space-y-4">
+          <Alert severity="warning" className="text-xs font-medium">
+            Você está prestes a aplicar a <strong>{productionMode === 'TRANSACTIONAL_ONLY' ? 'Limpeza Transacional (Zerar Estoques e Movimentações)' : 'Limpeza de Fábrica (Zero Absoluto)'}</strong> no ERP Almox Plus.
+          </Alert>
+
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2 text-xs text-slate-700 dark:text-slate-300">
+            <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>O backup completo de segurança será baixado automaticamente antes da limpeza.</span>
+            </div>
+            <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 font-bold">
+              <Cloud className="w-4 h-4 shrink-0" />
+              <span>O estado limpo será replicado para o Firestore e estará disponível para os computadores das 4 filiais.</span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 pt-2">
+            <Typography variant="caption" className="font-bold text-slate-800 dark:text-slate-200 block">
+              Para prosseguir com segurança, digite a palavra <strong>PRODUCAO</strong> abaixo:
+            </Typography>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Digite PRODUCAO"
+              value={confirmationCode}
+              onChange={(e) => setConfirmationCode(e.target.value)}
+              disabled={isProcessingProduction}
+            />
+          </div>
+        </DialogContent>
+        <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+          <Button onClick={() => setProductionModalOpen(false)} disabled={isProcessingProduction} color="inherit">
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            disabled={confirmationCode.trim().toUpperCase() !== 'PRODUCAO' || isProcessingProduction}
+            onClick={handleExecuteProductionPreparation}
+            startIcon={isProcessingProduction ? <RefreshCw className="w-4 h-4 animate-spin text-white" /> : <Rocket className="w-4 h-4 text-white" />}
+            className="font-extrabold text-xs text-white bg-blue-600 hover:bg-blue-700"
+          >
+            {isProcessingProduction ? 'Processando e Sincronizando...' : 'Confirmar e Iniciar Produção'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* MODAL DE INSPEÇÃO DE SNAPSHOT DE BACKUP */}
       <Dialog open={Boolean(inspectSnapshot)} onClose={() => setInspectSnapshot(null)} maxWidth="sm" fullWidth>

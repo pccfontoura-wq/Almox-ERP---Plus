@@ -697,13 +697,17 @@ export const Relatorios: React.FC = () => {
     const rows = currentData.map(item => Object.values(item).map(val => String(val)));
 
     const reportMeta = REPORT_METADATA[reportType];
+    const resolvedBranchInfo = targetBranch !== 'GLOBAL'
+      ? dataService.getBranchByCode(targetBranch)
+      : dataService.getBranchByCode('SP');
 
     exportToPDF(
       reportMeta.title,
       headers,
       rows,
       `Relatorio_${reportType}_${targetBranch}`,
-      `Módulo: ${reportMeta.module} | Unidade: ${targetBranch === 'GLOBAL' ? 'Todas as Unidades (GLOBAL)' : targetBranch} | Categoria: ${selectedCategory} | Período: ${periodSummaryLabel} | Total: ${currentData.length} registros`
+      `Módulo: ${reportMeta.module} | Unidade: ${targetBranch === 'GLOBAL' ? 'Todas as Unidades (GLOBAL)' : targetBranch} | Categoria: ${selectedCategory} | Período: ${periodSummaryLabel} | Total: ${currentData.length} registros`,
+      targetBranch !== 'GLOBAL' ? resolvedBranchInfo : null
     );
   };
 

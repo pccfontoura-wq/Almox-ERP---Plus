@@ -8,7 +8,7 @@ import {
   ShoppingCart, FileText, CheckCircle2, XCircle, Plus, Trash2,
   Building2, AlertCircle, ArrowRight, Clock, ExternalLink, Eye,
   Check, X, Search, Layers, RefreshCw, Send, DollarSign,
-  ShieldAlert, Scale
+  ShieldAlert, Scale, Printer
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -16,6 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { DataTable, Column } from '../components/DataTable';
+import { exportPurchaseOrderPDF, exportPurchaseRequestPDF } from '../utils/exportUtils';
 import {
   PurchaseOrder, PurchaseOrderStatus, PurchaseRequest,
   PurchaseRequestItem, PurchaseRequestStatus, Branch
@@ -709,6 +710,19 @@ export const Compras: React.FC = () => {
             <Eye className="w-3.5 h-3.5" />
             Analisar / Itens
           </Button>
+          <Tooltip title="Imprimir / Baixar PDF Oficial da SC">
+            <IconButton
+              size="small"
+              onClick={() => {
+                const branchInfo = dataService.getBranchByCode(r.branch);
+                const cc = state.costCenters.find(c => c.id === r.costCenterId);
+                exportPurchaseRequestPDF(r, branchInfo, cc);
+              }}
+              className="p-1 text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800"
+            >
+              <Printer className="w-3.5 h-3.5" />
+            </IconButton>
+          </Tooltip>
           {r.status === 'PENDENTE' && canEdit && (
             <Tooltip title="Cancelar Solicitação">
               <IconButton
@@ -821,6 +835,19 @@ export const Compras: React.FC = () => {
             >
               Ver
             </Button>
+            <Tooltip title="Imprimir / Baixar PDF Oficial da OC">
+              <IconButton
+                size="small"
+                onClick={() => {
+                  const branchInfo = dataService.getBranchByCode(po.branch);
+                  const cc = state.costCenters.find(c => c.id === po.costCenterId);
+                  exportPurchaseOrderPDF(po, branchInfo, cc);
+                }}
+                className="p-1 text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800"
+              >
+                <Printer className="w-3.5 h-3.5" />
+              </IconButton>
+            </Tooltip>
             {po.status === 'AGUARDANDO_APROVACAO' && (
               <Button
                 size="small"
@@ -1666,7 +1693,20 @@ export const Compras: React.FC = () => {
               </Box>
             </DialogContent>
 
-            <DialogActions className="px-6 py-3 border-t border-slate-200 dark:border-slate-800">
+            <DialogActions className="px-6 py-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <Button
+                variant="outlined"
+                color="primary"
+                startIcon={<Printer className="w-4 h-4" />}
+                onClick={() => {
+                  const branchInfo = dataService.getBranchByCode(selectedRequest.branch);
+                  const cc = state.costCenters.find(c => c.id === selectedRequest.costCenterId);
+                  exportPurchaseRequestPDF(selectedRequest, branchInfo, cc);
+                }}
+                className="font-bold text-xs"
+              >
+                Imprimir / Gerar PDF da Solicitação (SC)
+              </Button>
               <Button onClick={() => setRequestDetailModalOpen(false)}>Fechar</Button>
             </DialogActions>
           </div>
@@ -1994,7 +2034,20 @@ export const Compras: React.FC = () => {
               )}
             </DialogContent>
 
-            <DialogActions className="px-6 py-3 border-t border-slate-200 dark:border-slate-800">
+            <DialogActions className="px-6 py-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <Button
+                variant="outlined"
+                color="primary"
+                startIcon={<Printer className="w-4 h-4" />}
+                onClick={() => {
+                  const branchInfo = dataService.getBranchByCode(selectedPo.branch);
+                  const cc = state.costCenters.find(c => c.id === selectedPo.costCenterId);
+                  exportPurchaseOrderPDF(selectedPo, branchInfo, cc);
+                }}
+                className="font-bold text-xs"
+              >
+                Imprimir / Gerar PDF da Ordem de Compra (OC)
+              </Button>
               <Button onClick={() => setPoDetailModalOpen(false)}>Fechar</Button>
             </DialogActions>
           </div>

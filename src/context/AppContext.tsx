@@ -56,6 +56,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDataVersion(prev => prev + 1);
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = dataService.subscribe(() => {
+      setDataVersion(prev => prev + 1);
+    });
+    return unsubscribe;
+  }, []);
+
   return (
     <AppContext.Provider value={{
       selectedBranch,

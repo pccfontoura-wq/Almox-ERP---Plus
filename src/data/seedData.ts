@@ -343,7 +343,14 @@ export const INITIAL_PRODUCTS: Product[] = [
     maxStock: 60,
     stockByBranch: { RJ: 14, SJRP: 8, SP: 25, BSB: 2 }, // BSB below min!
     unitPrice: 115.00,
-    expirationDate: '2026-08-25', // Expiring soon!
+    expirationDate: '2026-08-25', // Vencido em 25/08/2026
+    batchNumber: 'LT-QUI-2024/99',
+    batches: [
+      { batchNumber: 'LT-QUI-2024/99', expirationDate: '2026-08-25', branch: 'SP', quantity: 25, notes: 'Lote padrão do fabricante QuimioTech - Todas as unidades compartilham o mesmo lote de vencimento' },
+      { batchNumber: 'LT-QUI-2024/99', expirationDate: '2026-08-25', branch: 'RJ', quantity: 14, notes: 'Lote padrão do fabricante QuimioTech' },
+      { batchNumber: 'LT-QUI-2024/99', expirationDate: '2026-08-25', branch: 'SJRP', quantity: 8, notes: 'Lote padrão do fabricante QuimioTech' },
+      { batchNumber: 'LT-QUI-2024/99', expirationDate: '2026-08-25', branch: 'BSB', quantity: 2, notes: 'Lote padrão do fabricante QuimioTech' }
+    ],
     locationSlot: 'PRAT-D3-S2',
     description: 'Solvente de alta pureza para limpeza de componentes eletrônicos e placas.',
     active: true,
@@ -401,14 +408,21 @@ export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-010',
     code: 'MED-001',
-    name: 'Kit de Primeiros SocorrosNR-7 Completo',
+    name: 'Kit de Primeiros Socorros NR-7 Completo',
     category: 'Saúde & Medicina',
     unit: 'UN',
     minStock: 10,
     maxStock: 50,
     stockByBranch: { RJ: 15, SJRP: 11, SP: 32, BSB: 8 }, // BSB below min
     unitPrice: 240.00,
-    expirationDate: '2026-08-15', // Expiring soon
+    expirationDate: '2026-08-14', // Vencido em 14/08/2026
+    batchNumber: 'LT-2025/MED-01',
+    batches: [
+      { batchNumber: 'LT-2025/MED-01', expirationDate: '2026-08-14', branch: 'SP', quantity: 32, notes: 'Lote corporativo unificado - Todas as unidades compartilham o mesmo lote de vencimento' },
+      { batchNumber: 'LT-2025/MED-01', expirationDate: '2026-08-14', branch: 'RJ', quantity: 15, notes: 'Lote corporativo unificado' },
+      { batchNumber: 'LT-2025/MED-01', expirationDate: '2026-08-14', branch: 'SJRP', quantity: 11, notes: 'Lote corporativo unificado' },
+      { batchNumber: 'LT-2025/MED-01', expirationDate: '2026-08-14', branch: 'BSB', quantity: 8, notes: 'Lote corporativo unificado' }
+    ],
     locationSlot: 'PRAT-G1-S1',
     description: 'Maleta em ABS equipada conforme diretrizes do Ministério do Trabalho.',
     active: true,
@@ -756,6 +770,54 @@ export const INITIAL_PURCHASE_ORDERS: PurchaseOrder[] = [
     approvedAt: '2025-07-11T14:00:00Z',
     deliveredAt: '2025-07-18T10:00:00Z',
     paymentTerms: '14 dias faturado'
+  },
+  {
+    id: 'po-504',
+    code: 'OC-2025-088',
+    branch: 'RJ',
+    costCenterId: 'cc-102',
+    costCenterName: 'Manutenção Infraestrutura RJ',
+    supplierName: 'EletroTubos & Conexões Industriais S/A',
+    supplierCnpj: '33.444.555/0001-66',
+    status: 'AGUARDANDO_APROVACAO',
+    budgetOverrun: true,
+    budgetOverrunAmount: 4850.00,
+    budgetOverrunJustification: 'Aditivo emergencial para reparo da infraestrutura elétrica na Unidade RJ, excedendo a cota orçamentária do mês.',
+    budgetOverrunApprovedBy: 'Carlos Eduardo Silva',
+    items: [
+      {
+        productId: 'prod-007',
+        productCode: 'MAN-001',
+        productName: 'Disjuntor Bipolar Din 32A 3kA Schneider',
+        unit: 'UN',
+        quantity: 120,
+        unitPrice: 45.00,
+        totalPrice: 5400.00
+      },
+      {
+        productId: 'prod-008',
+        productCode: 'MAN-002',
+        productName: 'Fita Isolante 3M Imperial 18mm x 20m',
+        unit: 'ROLO',
+        quantity: 350,
+        unitPrice: 11.00,
+        totalPrice: 3850.00
+      },
+      {
+        productId: 'prod-003',
+        productCode: 'INF-001',
+        productName: 'Cabo de Rede UTP Cat6 Furukawa (Caixa 305m)',
+        unit: 'CX',
+        quantity: 7,
+        unitPrice: 800.00,
+        totalPrice: 5600.00
+      }
+    ],
+    totalValue: 14850.00,
+    requestedBy: 'Juliana Costa e Souza',
+    createdAt: '2025-08-01T14:20:00Z',
+    estimatedDeliveryDate: '2025-08-12',
+    paymentTerms: '30 dias faturado'
   }
 ];
 

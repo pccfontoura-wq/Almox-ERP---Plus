@@ -24,15 +24,19 @@ export function exportToExcel(data: Record<string, any>[], filename: string = 'e
   XLSX.writeFile(workbook, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
 }
 
+import { BranchInfo, PurchaseOrder, PurchaseRequest, Requisition, CostCenter } from '../types';
+
 /**
- * Generates an executive PDF document with Almox Plus header and professional table layout
+ * Generates an executive PDF document with Almox Plus header and professional table layout,
+ * customized with official company/unit header (Razão Social, CNPJ, IE, Endereço e Gestor).
  */
 export function exportToPDF(
   title: string,
   headers: string[],
   rows: (string | number)[][],
   filename: string = 'relatorio-almoxplus',
-  subTitle?: string
+  subTitle?: string,
+  branchInfo?: BranchInfo | null
 ) {
   if (!headers || headers.length === 0) {
     alert('Não há colunas para gerar o relatório em PDF.');
@@ -51,33 +55,63 @@ export function exportToPDF(
   const rightMargin = 14;
   const tableWidth = pageWidth - leftMargin - rightMargin;
 
-  // Header Banner
-  doc.setFillColor(15, 23, 42); // Navy Blue
-  doc.rect(0, 0, pageWidth, 22, 'F');
+  // Header Banner with Official Branch Metadata
+  const isSpecificBranch = Boolean(branchInfo && branchInfo.code && branchInfo.code !== 'GLOBAL');
+  const bannerHeight = isSpecificBranch ? 25 : 22;
+
+  doc.setFillColor(15, 23, 42); // Navy Blue 900
+  doc.rect(0, 0, pageWidth, bannerHeight, 'F');
 
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.text('ALMOX PLUS - ERP EMPRESARIAL', leftMargin, 13);
+  doc.setFontSize(12);
+  doc.text('ALMOX PLUS • ERP CORPORATIVO & SUPRIMENTOS', leftMargin, 8);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, pageWidth - rightMargin, 13, { align: 'right' });
+  doc.setFontSize(8);
+  doc.text(`Emissão: ${new Date().toLocaleString('pt-BR')}`, pageWidth - rightMargin, 8, { align: 'right' });
+
+  if (isSpecificBranch && branchInfo) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(226, 232, 240); // slate-200
+    doc.text(`${branchInfo.corporateName || 'Almox Plus Tecnologia e Logística S.A.'} • ${branchInfo.name} (${branchInfo.code})`, leftMargin, 14);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(194, 205, 220);
+    const cnpjIe = `CNPJ: ${branchInfo.cnpj || '12.345.678/0001-90'} | Inscr. Estadual: ${branchInfo.stateRegistration || 'Isento'}${branchInfo.phone ? ` | Fone: ${branchInfo.phone}` : ''}`;
+    doc.text(cnpjIe, leftMargin, 19);
+
+    const addressLine = `Endereço: ${branchInfo.street || ''}${branchInfo.number ? ', ' + branchInfo.number : ''}${branchInfo.complement ? ' (' + branchInfo.complement + ')' : ''} - ${branchInfo.neighborhood || ''} - ${branchInfo.city}/${branchInfo.state} - CEP: ${branchInfo.zipCode || ''}`;
+    doc.text(addressLine, leftMargin, 23);
+
+    if (branchInfo.managerName) {
+      doc.text(`Gestor: ${branchInfo.managerName} (${branchInfo.managerRole || 'Responsável'})`, pageWidth - rightMargin, 19, { align: 'right' });
+    }
+  } else {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(203, 213, 225);
+    doc.text('Sede Matriz Corporativa • Almox Plus Tecnologia e Logística S.A. • CNPJ: 12.345.678/0001-90 • Av. Paulista, 1500 - SP', leftMargin, 14);
+    doc.text('Demonstrativo Consolidado de Todas as Unidades Operacionais (SP, RJ, BSB, SJRP)', leftMargin, 19);
+  }
 
   // Title and Subtitle
+  const titleY = bannerHeight + 9;
   doc.setFontSize(13);
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
-  doc.text(title.toUpperCase(), leftMargin, 32);
+  doc.text(title.toUpperCase(), leftMargin, titleY);
 
   if (subTitle) {
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 116, 139);
-    doc.text(subTitle, leftMargin, 38);
+    doc.text(subTitle, leftMargin, titleY + 5.5);
   }
 
-  let startY = subTitle ? 44 : 38;
+  let startY = subTitle ? titleY + 10.5 : titleY + 7;
 
   // Calculate dynamic proportional column widths based on content lengths
   const colCount = headers.length;
@@ -508,3 +542,824 @@ export function exportInventoryCountSheetPDF(
 
   doc.save(`folha-contagem-cega-${audit.code.toLowerCase()}_${audit.branch}.pdf`);
 }
+
+/**
+ * Generates an executive A4 Portrait PDF for a specific Purchase Order (OC - Ordem de Compra),
+ * complete with unit header, supplier data, itemized pricing, budget compliance, and signatures.
+ */
+export function exportPurchaseOrderPDF(
+  order: PurchaseOrder,
+  branchInfo?: BranchInfo | null,
+  costCenter?: CostCenter | null
+) {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth(); // 210mm
+  const pageHeight = doc.internal.pageSize.getHeight(); // 297mm
+  const leftMargin = 14;
+  const rightMargin = 14;
+  const contentWidth = pageWidth - leftMargin - rightMargin; // 182mm
+
+  // 1. TOP HEADER BANNER (Navy Blue)
+  doc.setFillColor(15, 23, 42); // slate-900
+  doc.rect(0, 0, pageWidth, 28, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('ALMOX PLUS • ERP CORPORATIVO & SUPRIMENTOS', leftMargin, 8);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`Documento emitido em: ${new Date().toLocaleString('pt-BR')}`, pageWidth - rightMargin, 8, { align: 'right' });
+
+  // Unit Header Information
+  const unitName = branchInfo?.name || `Unidade ${order.branch}`;
+  const corpName = branchInfo?.corporateName || 'Almox Plus Tecnologia e Logística S.A.';
+  const cnpj = branchInfo?.cnpj || '12.345.678/0001-90';
+  const ie = branchInfo?.stateRegistration || 'Isento';
+  const addr = branchInfo?.street
+    ? `${branchInfo.street}, ${branchInfo.number || 'S/N'}${branchInfo.complement ? ' - ' + branchInfo.complement : ''} - ${branchInfo.neighborhood || ''} - ${branchInfo.city}/${branchInfo.state} - CEP ${branchInfo.zipCode || ''}`
+    : `Pólo Operacional Unidade ${order.branch}`;
+  const contact = `${branchInfo?.phone || branchInfo?.whatsapp ? `Fone/WhatsApp: ${branchInfo?.phone || branchInfo?.whatsapp}` : ''}${branchInfo?.email ? ` | E-mail: ${branchInfo.email}` : ''}`;
+  const manager = branchInfo?.managerName ? `Gestor da Unidade: ${branchInfo.managerName} (${branchInfo.managerRole || 'Responsável'})` : '';
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(241, 245, 249);
+  doc.text(`${corpName} • ${unitName} (${order.branch})`, leftMargin, 14);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(203, 213, 225);
+  doc.text(`CNPJ: ${cnpj} | Inscrição Estadual: ${ie}${contact ? ` | ${contact}` : ''}`, leftMargin, 19);
+  doc.text(`Endereço: ${addr}${manager ? ` | ${manager}` : ''}`, leftMargin, 24);
+
+  // 2. DOCUMENT TITLE & CODE
+  let curY = 35;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(leftMargin, curY, contentWidth, 12, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(15, 23, 42);
+  doc.text('ORDEM DE COMPRA (OC) — AUTORIZAÇÃO DE FORNECIMENTO', leftMargin + 4, curY + 7.5);
+
+  doc.setFontSize(11);
+  doc.setTextColor(37, 99, 235); // Blue 600
+  doc.text(order.code, pageWidth - rightMargin - 4, curY + 7.5, { align: 'right' });
+
+  curY += 15;
+
+  // 3. METADATA CARDS (Two Columns: Order Info & Supplier Info)
+  const colW = (contentWidth - 4) / 2;
+  const boxH = 29;
+
+  // Box Left: Informações da Ordem
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(leftMargin, curY, colW, boxH, 'FD');
+
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(71, 85, 105);
+  doc.text('DADOS DA ORDEM DE COMPRA', leftMargin + 3, curY + 5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Data de Emissão: ${new Date(order.createdAt).toLocaleDateString('pt-BR')}`, leftMargin + 3, curY + 10);
+  doc.text(`Previsão de Entrega: ${order.estimatedDeliveryDate ? new Date(order.estimatedDeliveryDate).toLocaleDateString('pt-BR') : 'Imediata / Conforme Pedido'}`, leftMargin + 3, curY + 14.5);
+  doc.text(`Condição de Pagamento: ${order.paymentTerms || '28 dias faturado'}`, leftMargin + 3, curY + 19);
+  doc.text(`Status Atual: ${order.status} • Unidade de Destino: ${order.branch}`, leftMargin + 3, curY + 23.5);
+  if (order.purchaseRequestCode) {
+    doc.text(`Origem / Solicitação Vinculada: ${order.purchaseRequestCode}`, leftMargin + 3, curY + 27.5);
+  }
+
+  // Box Right: Informações do Fornecedor & Centro de Custo
+  const rightX = leftMargin + colW + 4;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(rightX, curY, colW, boxH, 'FD');
+
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(71, 85, 105);
+  doc.text('FORNECEDOR HOMOLOGADO & CENTRO DE CUSTO', rightX + 3, curY + 5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Razão Social: ${order.supplierName || 'Fornecedor Homologado'}`, rightX + 3, curY + 10);
+  doc.text(`CNPJ / CPF: ${order.supplierCnpj || '00.000.000/0001-00'}`, rightX + 3, curY + 14.5);
+  doc.text(`Centro de Custo: ${order.costCenterName || costCenter?.name || 'Geral Operacional'}`, rightX + 3, curY + 19);
+  doc.text(`Comprador / Solicitante: ${order.requestedBy || 'Setor de Suprimentos'}`, rightX + 3, curY + 23.5);
+
+  curY += boxH + 4;
+
+  // 4. BUDGET OVERRUN ALERT (IF APPLICABLE)
+  if (order.budgetOverrun) {
+    doc.setFillColor(254, 242, 242); // Rose 50
+    doc.setDrawColor(248, 113, 113); // Rose 400
+    doc.rect(leftMargin, curY, contentWidth, 12, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(185, 28, 28);
+    const overrunVal = (order.budgetOverrunAmount || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    doc.text(`⚠️ ALÇADA ESPECIAL: ORDEM COM ESTOURO DE TETO ORÇAMENTÁRIO (+ ${overrunVal})`, leftMargin + 3, curY + 5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(153, 27, 27);
+    const justif = order.budgetOverrunJustification || 'Aprovado sob alçada especial da Diretoria / Controladoria Financeira.';
+    doc.text(`Justificativa / Parecer: ${justif.slice(0, 110)}`, leftMargin + 3, curY + 9);
+
+    curY += 15;
+  }
+
+  // 5. ITEM TABLE HEADER
+  const tCol = {
+    idx: 10,
+    code: 28,
+    desc: 74,
+    un: 12,
+    qty: 18,
+    unitPrice: 20,
+    total: 20
+  };
+
+  const renderPoTableHeader = (y: number) => {
+    doc.setFillColor(15, 23, 42);
+    doc.rect(leftMargin, y, contentWidth, 7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(255, 255, 255);
+
+    let x = leftMargin;
+    doc.text('Item', x + 2, y + 4.8); x += tCol.idx;
+    doc.text('SKU / Código', x + 2, y + 4.8); x += tCol.code;
+    doc.text('Descrição do Material', x + 2, y + 4.8); x += tCol.desc;
+    doc.text('UN', x + 2, y + 4.8, { align: 'center' }); x += tCol.un;
+    doc.text('Qtd.', x + tCol.qty - 2, y + 4.8, { align: 'right' }); x += tCol.qty;
+    doc.text('Unitário', x + tCol.unitPrice - 2, y + 4.8, { align: 'right' }); x += tCol.unitPrice;
+    doc.text('Total (R$)', x + tCol.total - 2, y + 4.8, { align: 'right' });
+  };
+
+  renderPoTableHeader(curY);
+  curY += 7;
+
+  // 6. ITEM TABLE ROWS
+  const rowH = 6.5;
+  let subtotal = 0;
+
+  order.items.forEach((item, index) => {
+    if (curY + rowH > pageHeight - 50) {
+      doc.addPage();
+      curY = 16;
+      renderPoTableHeader(curY);
+      curY += 7;
+    }
+
+    if (index % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(leftMargin, curY, contentWidth, rowH, 'F');
+    }
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(leftMargin, curY, contentWidth, rowH, 'S');
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(30, 41, 59);
+
+    const itemTotal = item.totalPrice || (item.quantity * item.unitPrice);
+    subtotal += itemTotal;
+
+    let x = leftMargin;
+    doc.text(String(index + 1).padStart(2, '0'), x + 2, curY + 4.5); x += tCol.idx;
+    doc.setFont('helvetica', 'bold');
+    doc.text(item.productCode || '-', x + 2, curY + 4.5); x += tCol.code;
+
+    doc.setFont('helvetica', 'normal');
+    let desc = item.productName || 'Material diverso';
+    if (doc.getTextWidth(desc) > tCol.desc - 4) {
+      while (desc.length > 0 && doc.getTextWidth(desc + '...') > tCol.desc - 4) {
+        desc = desc.slice(0, -1);
+      }
+      desc += '...';
+    }
+    doc.text(desc, x + 2, curY + 4.5); x += tCol.desc;
+
+    doc.text(item.unit || 'UN', x + (tCol.un / 2), curY + 4.5, { align: 'center' }); x += tCol.un;
+    doc.text(String(item.quantity), x + tCol.qty - 2, curY + 4.5, { align: 'right' }); x += tCol.qty;
+    doc.text((item.unitPrice || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }), x + tCol.unitPrice - 2, curY + 4.5, { align: 'right' }); x += tCol.unitPrice;
+    doc.setFont('helvetica', 'bold');
+    doc.text(itemTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 }), x + tCol.total - 2, curY + 4.5, { align: 'right' });
+
+    curY += rowH;
+  });
+
+  // 7. TOTALS BOX
+  curY += 2;
+  const totalVal = order.totalValue || subtotal;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(leftMargin + (contentWidth - 75), curY, 75, 10, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(15, 23, 42);
+  doc.text('VALOR TOTAL DA OC:', leftMargin + (contentWidth - 72), curY + 6.5);
+  doc.setFontSize(10.5);
+  doc.setTextColor(37, 99, 235);
+  doc.text(totalVal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), pageWidth - rightMargin - 4, curY + 6.5, { align: 'right' });
+
+  curY += 14;
+
+  // 8. DELIVERY & BILLING INSTRUCTIONS
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(leftMargin, curY, contentWidth, 14, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text('INSTRUÇÕES DE FATURAMENTO, ENTREGA E RECEBIMENTO FISCAL:', leftMargin + 3, curY + 4.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`1. A Nota Fiscal (DANFE) deve constar obrigatoriamente o número desta OC (${order.code}) e ser emitida contra o CNPJ ${cnpj}.`, leftMargin + 3, curY + 8);
+  doc.text(`2. Entrega física no endereço da ${unitName}: ${addr}. Horário de recebimento: 08:00 às 17:00.`, leftMargin + 3, curY + 11.5);
+
+  curY += 18;
+
+  // 9. SIGNATURES BLOCK
+  if (curY + 30 > pageHeight - 12) {
+    doc.addPage();
+    curY = 25;
+  }
+
+  const sigW = (contentWidth - 12) / 3;
+
+  // Signature 1: Comprador
+  doc.setDrawColor(148, 163, 184);
+  doc.line(leftMargin, curY + 12, leftMargin + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Comprador / Suprimentos', leftMargin + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(order.requestedBy || 'Emissor Autorizado', leftMargin + (sigW / 2), curY + 20, { align: 'center' });
+
+  // Signature 2: Gestor da Unidade
+  const sig2X = leftMargin + sigW + 6;
+  doc.line(sig2X, curY + 12, sig2X + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Gestor da Unidade / Almoxarifado', sig2X + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(branchInfo?.managerName || 'Aprovação Operacional', sig2X + (sigW / 2), curY + 20, { align: 'center' });
+
+  // Signature 3: Recebimento Fornecedor / Transportadora
+  const sig3X = sig2X + sigW + 6;
+  doc.line(sig3X, curY + 12, sig3X + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Aceite do Fornecedor / Transportador', sig3X + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Nome Legível e Data de Entrega', sig3X + (sigW / 2), curY + 20, { align: 'center' });
+
+  // Footer on all pages
+  const pageCount = doc.internal.pages.length - 1;
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `Ordem de Compra ${order.code} • ${unitName} • Página ${i} de ${pageCount} — Almox Plus ERP Enterprise`,
+      pageWidth / 2,
+      pageHeight - 6,
+      { align: 'center' }
+    );
+  }
+
+  doc.save(`ordem-compra-${order.code.toLowerCase()}_${order.branch}.pdf`);
+}
+
+/**
+ * Generates an executive A4 Portrait PDF for a specific Purchase Request (SC - Solicitação de Compra),
+ * complete with unit header, department justification, priority, item list, and approval signatures.
+ */
+export function exportPurchaseRequestPDF(
+  request: PurchaseRequest,
+  branchInfo?: BranchInfo | null,
+  costCenter?: CostCenter | null
+) {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const leftMargin = 14;
+  const rightMargin = 14;
+  const contentWidth = pageWidth - leftMargin - rightMargin;
+
+  // Header Banner
+  doc.setFillColor(15, 23, 42); // slate-900
+  doc.rect(0, 0, pageWidth, 28, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('ALMOX PLUS • ERP CORPORATIVO & SUPRIMENTOS', leftMargin, 8);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`Emissão: ${new Date().toLocaleString('pt-BR')}`, pageWidth - rightMargin, 8, { align: 'right' });
+
+  const unitName = branchInfo?.name || `Unidade ${request.branch}`;
+  const corpName = branchInfo?.corporateName || 'Almox Plus Tecnologia e Logística S.A.';
+  const cnpj = branchInfo?.cnpj || '12.345.678/0001-90';
+  const ie = branchInfo?.stateRegistration || 'Isento';
+  const addr = branchInfo?.street
+    ? `${branchInfo.street}, ${branchInfo.number || 'S/N'}${branchInfo.complement ? ' - ' + branchInfo.complement : ''} - ${branchInfo.neighborhood || ''} - ${branchInfo.city}/${branchInfo.state} - CEP ${branchInfo.zipCode || ''}`
+    : `Pólo Operacional Unidade ${request.branch}`;
+  const contact = `${branchInfo?.phone || branchInfo?.whatsapp ? `Fone: ${branchInfo?.phone || branchInfo?.whatsapp}` : ''}${branchInfo?.email ? ` | E-mail: ${branchInfo.email}` : ''}`;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(241, 245, 249);
+  doc.text(`${corpName} • ${unitName} (${request.branch})`, leftMargin, 14);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(203, 213, 225);
+  doc.text(`CNPJ: ${cnpj} | IE: ${ie}${contact ? ` | ${contact}` : ''}`, leftMargin, 19);
+  doc.text(`Endereço: ${addr}`, leftMargin, 24);
+
+  // Title & Code
+  let curY = 35;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(leftMargin, curY, contentWidth, 12, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(15, 23, 42);
+  doc.text('SOLICITAÇÃO DE COMPRA (SC) — PEDIDO DE AQUISIÇÃO', leftMargin + 4, curY + 7.5);
+
+  doc.setFontSize(11);
+  doc.setTextColor(37, 99, 235);
+  doc.text(request.code, pageWidth - rightMargin - 4, curY + 7.5, { align: 'right' });
+
+  curY += 15;
+
+  // Metadata Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(leftMargin, curY, contentWidth, 22, 'FD');
+
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(71, 85, 105);
+  doc.text('DADOS DA REQUISIÇÃO:', leftMargin + 3, curY + 5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Data de Abertura: ${new Date(request.createdAt).toLocaleDateString('pt-BR')}`, leftMargin + 3, curY + 10);
+  doc.text(`Solicitante: ${request.requestedBy} (${request.requestedByEmail || 'Setor Operacional'})`, leftMargin + 3, curY + 14.5);
+  doc.text(`Departamento / Finalidade: ${request.department || 'Operações'}`, leftMargin + 3, curY + 19);
+
+  const col2X = leftMargin + 95;
+  doc.text(`Unidade Solicitante: ${request.branch} (${unitName})`, col2X, curY + 10);
+  doc.text(`Centro de Custo: ${request.costCenterName || costCenter?.name || 'Geral'}`, col2X, curY + 14.5);
+  doc.text(`Prioridade: ${request.priority} • Status: ${request.status}`, col2X, curY + 19);
+
+  curY += 25;
+
+  // Justification Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(leftMargin, curY, contentWidth, 12, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text('JUSTIFICATIVA DA NECESSIDADE / FINALIDADE DA COMPRA:', leftMargin + 3, curY + 4.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(30, 41, 59);
+  const just = request.justification || 'Reposição de estoque / atendimento a demandas operacionais.';
+  doc.text(just.slice(0, 130), leftMargin + 3, curY + 8.5);
+
+  curY += 16;
+
+  // Table Header
+  const scCol = {
+    idx: 10,
+    code: 26,
+    desc: 70,
+    un: 12,
+    qty: 18,
+    estUnit: 23,
+    totalEst: 23
+  };
+
+  const renderScTableHeader = (y: number) => {
+    doc.setFillColor(15, 23, 42);
+    doc.rect(leftMargin, y, contentWidth, 7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(255, 255, 255);
+
+    let x = leftMargin;
+    doc.text('Item', x + 2, y + 4.8); x += scCol.idx;
+    doc.text('SKU / Código', x + 2, y + 4.8); x += scCol.code;
+    doc.text('Descrição do Material Requisitado', x + 2, y + 4.8); x += scCol.desc;
+    doc.text('UN', x + 2, y + 4.8, { align: 'center' }); x += scCol.un;
+    doc.text('Qtd.', x + scCol.qty - 2, y + 4.8, { align: 'right' }); x += scCol.qty;
+    doc.text('Estimado UN', x + scCol.estUnit - 2, y + 4.8, { align: 'right' }); x += scCol.estUnit;
+    doc.text('Total Estimado', x + scCol.totalEst - 2, y + 4.8, { align: 'right' });
+  };
+
+  renderScTableHeader(curY);
+  curY += 7;
+
+  // Table Rows
+  const rowH = 6.5;
+  let totalEstimado = 0;
+
+  request.items.forEach((item, index) => {
+    if (curY + rowH > pageHeight - 45) {
+      doc.addPage();
+      curY = 16;
+      renderScTableHeader(curY);
+      curY += 7;
+    }
+
+    if (index % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(leftMargin, curY, contentWidth, rowH, 'F');
+    }
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(leftMargin, curY, contentWidth, rowH, 'S');
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(30, 41, 59);
+
+    const estUnit = item.estimatedUnitPrice || 0;
+    const itemTotal = item.quantity * estUnit;
+    totalEstimado += itemTotal;
+
+    let x = leftMargin;
+    doc.text(String(index + 1).padStart(2, '0'), x + 2, curY + 4.5); x += scCol.idx;
+    doc.setFont('helvetica', 'bold');
+    doc.text(item.productCode || 'NOVO', x + 2, curY + 4.5); x += scCol.code;
+
+    doc.setFont('helvetica', 'normal');
+    let desc = item.productName || 'Material';
+    if (doc.getTextWidth(desc) > scCol.desc - 4) {
+      while (desc.length > 0 && doc.getTextWidth(desc + '...') > scCol.desc - 4) {
+        desc = desc.slice(0, -1);
+      }
+      desc += '...';
+    }
+    doc.text(desc, x + 2, curY + 4.5); x += scCol.desc;
+
+    doc.text(item.unit || 'UN', x + (scCol.un / 2), curY + 4.5, { align: 'center' }); x += scCol.un;
+    doc.text(String(item.quantity), x + scCol.qty - 2, curY + 4.5, { align: 'right' }); x += scCol.qty;
+    doc.text(estUnit > 0 ? estUnit.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : 'A Cotar', x + scCol.estUnit - 2, curY + 4.5, { align: 'right' }); x += scCol.estUnit;
+    doc.setFont('helvetica', 'bold');
+    doc.text(itemTotal > 0 ? itemTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : 'A Cotar', x + scCol.totalEst - 2, curY + 4.5, { align: 'right' });
+
+    curY += rowH;
+  });
+
+  // Total Box
+  curY += 2;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(leftMargin + (contentWidth - 85), curY, 85, 10, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('TOTAL ESTIMADO DA SC:', leftMargin + (contentWidth - 82), curY + 6.5);
+  doc.setFontSize(9.5);
+  doc.setTextColor(37, 99, 235);
+  doc.text(totalEstimado > 0 ? totalEstimado.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'Sob Cotação', pageWidth - rightMargin - 4, curY + 6.5, { align: 'right' });
+
+  curY += 18;
+
+  // Signatures Block
+  if (curY + 30 > pageHeight - 12) {
+    doc.addPage();
+    curY = 25;
+  }
+
+  const sigW = (contentWidth - 12) / 3;
+
+  doc.setDrawColor(148, 163, 184);
+  doc.line(leftMargin, curY + 12, leftMargin + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Solicitante do Setor', leftMargin + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(request.requestedBy, leftMargin + (sigW / 2), curY + 20, { align: 'center' });
+
+  const sig2X = leftMargin + sigW + 6;
+  doc.line(sig2X, curY + 12, sig2X + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Gestor do Centro de Custo', sig2X + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Aprovação Orçamentária', sig2X + (sigW / 2), curY + 20, { align: 'center' });
+
+  const sig3X = sig2X + sigW + 6;
+  doc.line(sig3X, curY + 12, sig3X + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Setor de Compras / Cotação', sig3X + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Parecer e Abertura de OC', sig3X + (sigW / 2), curY + 20, { align: 'center' });
+
+  const pageCount = doc.internal.pages.length - 1;
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `Solicitação de Compra ${request.code} • ${unitName} • Página ${i} de ${pageCount} — Almox Plus ERP`,
+      pageWidth / 2,
+      pageHeight - 6,
+      { align: 'center' }
+    );
+  }
+
+  doc.save(`solicitacao-compra-${request.code.toLowerCase()}_${request.branch}.pdf`);
+}
+
+/**
+ * Generates an executive A4 Portrait PDF for a Material Requisition (SM - Solicitação de Material ao Almoxarifado),
+ * complete with unit header, requesting user/department, stock withdrawal list, and warehouse signatures.
+ */
+export function exportRequisitionPDF(
+  requisition: Requisition,
+  branchInfo?: BranchInfo | null,
+  costCenter?: CostCenter | null
+) {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const leftMargin = 14;
+  const rightMargin = 14;
+  const contentWidth = pageWidth - leftMargin - rightMargin;
+
+  // Header Banner
+  doc.setFillColor(15, 23, 42); // slate-900
+  doc.rect(0, 0, pageWidth, 28, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('ALMOX PLUS • ERP CORPORATIVO & GESTÃO DE ESTOQUE', leftMargin, 8);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`Emissão: ${new Date().toLocaleString('pt-BR')}`, pageWidth - rightMargin, 8, { align: 'right' });
+
+  const unitName = branchInfo?.name || `Almoxarifado Unidade ${requisition.branch}`;
+  const corpName = branchInfo?.corporateName || 'Almox Plus Tecnologia e Logística S.A.';
+  const cnpj = branchInfo?.cnpj || '12.345.678/0001-90';
+  const ie = branchInfo?.stateRegistration || 'Isento';
+  const addr = branchInfo?.street
+    ? `${branchInfo.street}, ${branchInfo.number || 'S/N'}${branchInfo.complement ? ' - ' + branchInfo.complement : ''} - ${branchInfo.neighborhood || ''} - ${branchInfo.city}/${branchInfo.state} - CEP ${branchInfo.zipCode || ''}`
+    : `Almoxarifado Central Unidade ${requisition.branch}`;
+  const contact = `${branchInfo?.phone || branchInfo?.whatsapp ? `Fone: ${branchInfo?.phone || branchInfo?.whatsapp}` : ''}`;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(241, 245, 249);
+  doc.text(`${corpName} • ${unitName} (${requisition.branch})`, leftMargin, 14);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(203, 213, 225);
+  doc.text(`CNPJ: ${cnpj} | IE: ${ie}${contact ? ` | ${contact}` : ''}`, leftMargin, 19);
+  doc.text(`Endereço: ${addr}`, leftMargin, 24);
+
+  // Title & Code
+  let curY = 35;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(leftMargin, curY, contentWidth, 12, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(15, 23, 42);
+  doc.text('REQUISIÇÃO INTERNA DE MATERIAL — ALMOXARIFADO', leftMargin + 4, curY + 7.5);
+
+  doc.setFontSize(11);
+  doc.setTextColor(37, 99, 235);
+  doc.text(requisition.code, pageWidth - rightMargin - 4, curY + 7.5, { align: 'right' });
+
+  curY += 15;
+
+  // Metadata Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(leftMargin, curY, contentWidth, 20, 'FD');
+
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(71, 85, 105);
+  doc.text('DADOS DA SOLICITAÇÃO DE MATERIAL:', leftMargin + 3, curY + 4.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Data de Emissão: ${new Date(requisition.createdAt).toLocaleDateString('pt-BR')}`, leftMargin + 3, curY + 9);
+  doc.text(`Solicitante: ${requisition.requestedBy}`, leftMargin + 3, curY + 13.5);
+  doc.text(`Centro de Custo: ${requisition.costCenterName || costCenter?.name || 'Geral'}`, leftMargin + 3, curY + 17.5);
+
+  const col2X = leftMargin + 95;
+  doc.text(`Unidade / Almoxarifado: ${requisition.branch} (${unitName})`, col2X, curY + 9);
+  doc.text(`Prioridade: ${requisition.priority}`, col2X, curY + 13.5);
+  doc.text(`Status do Pedido: ${requisition.status}${requisition.approvedBy ? ` (Aprovado por ${requisition.approvedBy})` : ''}`, col2X, curY + 17.5);
+
+  curY += 24;
+
+  // Items Table Header
+  const reqCol = {
+    idx: 10,
+    code: 28,
+    desc: 84,
+    un: 14,
+    requestedQty: 23,
+    fulfilledQty: 23
+  };
+
+  const renderReqTableHeader = (y: number) => {
+    doc.setFillColor(15, 23, 42);
+    doc.rect(leftMargin, y, contentWidth, 7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(255, 255, 255);
+
+    let x = leftMargin;
+    doc.text('Item', x + 2, y + 4.8); x += reqCol.idx;
+    doc.text('SKU / Código', x + 2, y + 4.8); x += reqCol.code;
+    doc.text('Descrição do Material', x + 2, y + 4.8); x += reqCol.desc;
+    doc.text('UN', x + 2, y + 4.8, { align: 'center' }); x += reqCol.un;
+    doc.text('Qtd. Solicitada', x + reqCol.requestedQty - 2, y + 4.8, { align: 'right' }); x += reqCol.requestedQty;
+    doc.text('Qtd. Atendida', x + reqCol.fulfilledQty - 2, y + 4.8, { align: 'right' });
+  };
+
+  renderReqTableHeader(curY);
+  curY += 7;
+
+  // Table Rows
+  const rowH = 6.5;
+
+  requisition.items.forEach((item, index) => {
+    if (curY + rowH > pageHeight - 50) {
+      doc.addPage();
+      curY = 16;
+      renderReqTableHeader(curY);
+      curY += 7;
+    }
+
+    if (index % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(leftMargin, curY, contentWidth, rowH, 'F');
+    }
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(leftMargin, curY, contentWidth, rowH, 'S');
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(30, 41, 59);
+
+    let x = leftMargin;
+    doc.text(String(index + 1).padStart(2, '0'), x + 2, curY + 4.5); x += reqCol.idx;
+    doc.setFont('helvetica', 'bold');
+    doc.text(item.productCode || '-', x + 2, curY + 4.5); x += reqCol.code;
+
+    doc.setFont('helvetica', 'normal');
+    let desc = item.productName || 'Material';
+    if (doc.getTextWidth(desc) > reqCol.desc - 4) {
+      while (desc.length > 0 && doc.getTextWidth(desc + '...') > reqCol.desc - 4) {
+        desc = desc.slice(0, -1);
+      }
+      desc += '...';
+    }
+    doc.text(desc, x + 2, curY + 4.5); x += reqCol.desc;
+
+    doc.text(item.unit || 'UN', x + (reqCol.un / 2), curY + 4.5, { align: 'center' }); x += reqCol.un;
+    doc.text(String(item.requestedQuantity), x + reqCol.requestedQty - 2, curY + 4.5, { align: 'right' }); x += reqCol.requestedQty;
+    doc.setFont('helvetica', 'bold');
+    doc.text(String(item.fulfilledQuantity !== undefined ? item.fulfilledQuantity : item.requestedQuantity), x + reqCol.fulfilledQty - 2, curY + 4.5, { align: 'right' });
+
+    curY += rowH;
+  });
+
+  curY += 6;
+
+  // Receipt Terms Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(leftMargin, curY, contentWidth, 14, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text('TERMO DE RESPONSABILIDADE & RECEBIMENTO FÍSICO:', leftMargin + 3, curY + 4.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Declaro haver recebido em perfeita ordem e quantidade os materiais acima relacionados para uso estrito nas atividades operacionais.', leftMargin + 3, curY + 8.5);
+  doc.text('A responsabilidade pela guarda, conservação e aplicação correta do material passa a ser do solicitante/receptor.', leftMargin + 3, curY + 11.5);
+
+  curY += 20;
+
+  // Signatures
+  if (curY + 28 > pageHeight - 12) {
+    doc.addPage();
+    curY = 25;
+  }
+
+  const sigW = (contentWidth - 10) / 2;
+
+  // Signature 1: Solicitante / Receptor
+  doc.setDrawColor(148, 163, 184);
+  doc.line(leftMargin + 10, curY + 12, leftMargin + 10 + sigW, curY + 12);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Assinatura do Solicitante / Receptor', leftMargin + 10 + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Nome: ${requisition.requestedBy}`, leftMargin + 10 + (sigW / 2), curY + 20, { align: 'center' });
+
+  // Signature 2: Almoxarife Responsável
+  const sig2X = leftMargin + 10 + sigW + 10;
+  doc.line(sig2X, curY + 12, sig2X + sigW, curY + 12);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Visto do Almoxarife / Baixa no ERP', sig2X + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Unidade ${requisition.branch} • Almoxarifado Central`, sig2X + (sigW / 2), curY + 20, { align: 'center' });
+
+  const pageCount = doc.internal.pages.length - 1;
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `Requisição de Material ${requisition.code} • ${unitName} • Página ${i} de ${pageCount} — Almox Plus ERP`,
+      pageWidth / 2,
+      pageHeight - 6,
+      { align: 'center' }
+    );
+  }
+
+  doc.save(`requisicao-material-${requisition.code.toLowerCase()}_${requisition.branch}.pdf`);
+}
+

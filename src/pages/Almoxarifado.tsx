@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import {
   Box, Typography, Tabs, Tab, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Select, FormControl, InputLabel,
-  Alert, Chip
+  Alert, Chip, IconButton, Tooltip
 } from '@mui/material';
-import { ArrowRightLeft, Eye, Paperclip, Upload } from 'lucide-react';
+import { ArrowRightLeft, Eye, Paperclip, Upload, Printer, FileText } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
 import { useAuth } from '../context/AuthContext';
@@ -13,6 +13,7 @@ import { Breadcrumb } from '../components/Breadcrumb';
 import { DataTable, Column } from '../components/DataTable';
 import { Product, Movement, Transfer, Requisition, Branch, ProductAttachment } from '../types';
 import { ProductDetailModal } from '../components/ProductDetailModal';
+import { exportRequisitionPDF } from '../utils/exportUtils';
 
 export const Almoxarifado: React.FC = () => {
   const { currentUser } = useAuth();
@@ -234,32 +235,54 @@ export const Almoxarifado: React.FC = () => {
     },
     {
       id: 'actions',
-      label: 'Ações de Aprovação',
+      label: 'Ações de Aprovação & Impressão',
       accessor: (r) => r.id,
       exportable: false,
       render: (r) => (
-        r.status === 'PENDENTE' && canEdit ? (
-          <Box className="flex items-center gap-1">
-            <Button
+        <Box className="flex items-center gap-1">
+          <Tooltip title="Imprimir / Baixar PDF Oficial da Requisição (SM)">
+            <IconButton
               size="small"
-              variant="contained"
-              color="info"
-              onClick={() => handleApproveReq(r.id)}
-              className="text-[10px] py-0.5 px-2 font-bold"
+              onClick={() => {
+                const branchInfo = dataService.getBranchByCode(r.branch);
+                const cc = state.costCenters.find(c => c.id === r.costCenterId);
+                exportRequisitionPDF(r, branchInfo, cc);
+              }}
+              className="p-1 text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800"
             >
-              Aprovar
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              color="success"
-              onClick={() => handleFulfillReq(r.id)}
-              className="text-[10px] py-0.5 px-2 font-bold"
-            >
-              Atender
-            </Button>
-          </Box>
-        ) : <Typography variant="caption" className="text-slate-400">{r.approvedBy ? `Aprovado por ${r.approvedBy}` : '-'}</Typography>
+              <Printer className="w-3.5 h-3.5" />
+            </IconButton>
+          </Tooltip>
+
+          {r.status === 'PENDENTE' && canEdit && (
+            <>
+              <Button
+                size="small"
+                variant="contained"
+                color="info"
+                onClick={() => handleApproveReq(r.id)}
+                className="text-[10px] py-0.5 px-2 font-bold"
+              >
+                Aprovar
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                color="success"
+                onClick={() => handleFulfillReq(r.id)}
+                className="text-[10px] py-0.5 px-2 font-bold"
+              >
+                Atender
+              </Button>
+            </>
+          )}
+
+          {r.status !== 'PENDENTE' && (
+            <Typography variant="caption" className="text-slate-400 text-[10px]">
+              {r.approvedBy ? `Aprovado por ${r.approvedBy}` : '-'}
+            </Typography>
+          )}
+        </Box>
       )
     }
   ];

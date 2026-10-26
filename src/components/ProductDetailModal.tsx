@@ -89,6 +89,50 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     else if (daysToExp <= 60) expStatus = 'EXPIRING';
   }
 
+  // Consolidação de Lotes e Validade por Unidade Operacional
+  const branchesList = state.branches && state.branches.length > 0 ? state.branches : [
+    { id: 'b-sp', code: 'SP', name: 'Unidade São Paulo (Matriz)', city: 'São Paulo', active: true },
+    { id: 'b-rj', code: 'RJ', name: 'Unidade Rio de Janeiro', city: 'Rio de Janeiro', active: true },
+    { id: 'b-sjrp', code: 'SJRP', name: 'Unidade São José do Rio Preto', city: 'São José do Rio Preto', active: true },
+    { id: 'b-bsb', code: 'BSB', name: 'Unidade Brasília', city: 'Brasília', active: true }
+  ];
+
+  const batchPerBranch = branchesList.map(b => {
+    const qty = (product.stockByBranch && product.stockByBranch[b.code] !== undefined)
+      ? Number(product.stockByBranch[b.code])
+      : 0;
+    const branchBatch = product.batches?.find(pb => pb.branch === b.code);
+    const batchCode = branchBatch?.batchNumber || product.batchNumber || 'LT-PADRAO';
+    const batchExp = branchBatch?.expirationDate || product.expirationDate;
+
+    let branchExpStatus: 'NORMAL' | 'EXPIRING' | 'EXPIRED' | 'NONE' = 'NONE';
+    let branchDays: number | null = null;
+    if (batchExp) {
+      const exp = new Date(batchExp);
+      const diffTime = exp.getTime() - new Date().getTime();
+      branchDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (branchDays < 0) branchExpStatus = 'EXPIRED';
+      else if (branchDays <= 60) branchExpStatus = 'EXPIRING';
+      else branchExpStatus = 'NORMAL';
+    }
+
+    return {
+      branchCode: b.code,
+      branchName: b.name,
+      quantity: qty,
+      batchNumber: batchCode,
+      expirationDate: batchExp,
+      daysToExp: branchDays,
+      status: branchExpStatus,
+      notes: branchBatch?.notes
+    };
+  });
+
+  const uniqueBatches = Array.from(new Set(batchPerBranch.map(b => b.batchNumber).filter(Boolean)));
+  const isSameBatchAcrossAllBranches = uniqueBatches.length <= 1;
+  const expiredStockTotal = batchPerBranch.reduce((acc, b) => b.status === 'EXPIRED' ? acc + b.quantity : acc, 0);
+  const financialLossExpired = expiredStockTotal * (product.unitPrice || 0);
+
   // Monthly consumption chart data simulation/calculation
   const chartData = {
     labels: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul'],
@@ -483,34 +527,169 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           </Box>
         )}
 
-        {/* TAB 6: VALIDADE */}
+        {/* TAB 6: VALIDADE & LOTES */}
         {tab === 5 && (
           <Box className="space-y-4">
-            <Card className="rounded-xl p-4 border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <Typography variant="caption" className="text-slate-400 font-bold uppercase text-[10px]">
-                  Data de Validade Registrada
+            {/* CARDS DE TOPO: DATA DE VALIDADE, LOTE PRINCIPAL E HOMOGENEIDADE */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <Card className="rounded-xl p-4 border-slate-200 dark:border-slate-800">
+                <Typography variant="caption" className="text-slate-400 font-bold uppercase text-[10px] block">
+                  Data de Validade Geral
                 </Typography>
-                <Typography variant="h6" className="font-bold text-slate-900 dark:text-slate-100 mt-1">
-                  {product.expirationDate ? new Date(product.expirationDate).toLocaleDateString('pt-BR') : 'Produto sem controle de validade'}
+                <div className="flex items-center justify-between mt-1.5">
+                  <Typography variant="h6" className="font-bold text-slate-900 dark:text-slate-100 text-sm md:text-base">
+                    {product.expirationDate ? new Date(product.expirationDate).toLocaleDateString('pt-BR') : 'Sem controle'}
+                  </Typography>
+                  {product.expirationDate && (
+                    <Chip
+                      label={expStatus === 'EXPIRED' ? 'VENCIDO' : expStatus === 'EXPIRING' ? `Vence em ${daysToExp}d` : 'Dentro do Prazo'}
+                      color={expStatus === 'EXPIRED' ? 'error' : expStatus === 'EXPIRING' ? 'warning' : 'success'}
+                      size="small"
+                      className="font-bold text-[11px]"
+                    />
+                  )}
+                </div>
+              </Card>
+
+              <Card className="rounded-xl p-4 border-slate-200 dark:border-slate-800">
+                <Typography variant="caption" className="text-slate-400 font-bold uppercase text-[10px] block">
+                  Código do Lote Registrado
                 </Typography>
-              </div>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <span className="font-mono font-bold text-blue-600 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded text-sm">
+                    {product.batchNumber || 'LT-PADRAO'}
+                  </span>
+                </div>
+              </Card>
 
-              {product.expirationDate && (
-                <Chip
-                  label={expStatus === 'EXPIRED' ? 'VENCIDO' : expStatus === 'EXPIRING' ? `Vence em ${daysToExp} dias` : 'Dentro do Prazo'}
-                  color={expStatus === 'EXPIRED' ? 'error' : expStatus === 'EXPIRING' ? 'warning' : 'success'}
-                  className="font-bold text-xs"
-                />
-              )}
-            </Card>
+              <Card className="rounded-xl p-4 border-slate-200 dark:border-slate-800">
+                <Typography variant="caption" className="text-slate-400 font-bold uppercase text-[10px] block">
+                  Consolidação entre Unidades
+                </Typography>
+                <div className="mt-1.5">
+                  {isSameBatchAcrossAllBranches ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-1 rounded-md">
+                      <Check className="w-3.5 h-3.5" />
+                      Mesmo lote em todas as unidades
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-1 rounded-md">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      Lotes distintos por unidade
+                    </span>
+                  )}
+                </div>
+              </Card>
+            </div>
 
-            {expStatus === 'EXPIRING' && (
-              <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-xl text-amber-800 dark:text-amber-200 text-xs font-medium flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Alerta automático disparado (60/30/15/7 dias): Recomenda-se priorizar o consumo deste lote (FEFO/PVPS).</span>
+            {/* ALERTA OPERACIONAL DE VENCIMENTO / EXPIRAÇÃO */}
+            {expStatus === 'EXPIRED' && (
+              <div className="p-4 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-rose-800 dark:text-rose-200 font-bold text-xs">
+                    <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>PRODUTO COM VALIDADE VENCIDA — AÇÃO OPERACIONAL OBRIGATÓRIA</span>
+                  </div>
+                  <span className="font-bold text-xs text-rose-700 dark:text-rose-300">
+                    Prejuízo Total: R$ {financialLossExpired.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <Typography variant="body2" className="text-xs text-rose-700 dark:text-rose-300 leading-relaxed">
+                  As <strong>{expiredStockTotal} unidades</strong> distribuídas nas filiais pertencem ao lote <strong>{product.batchNumber || 'LT-PADRAO'}</strong> com validade expirada. É vedada qualquer liberação para consumo ou requisição. Proceder imediatamente com a segregação física em quarentena e protocolo de descarte/baixa por avaria.
+                </Typography>
               </div>
             )}
+
+            {expStatus === 'EXPIRING' && (
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-xl text-amber-800 dark:text-amber-200 text-xs font-medium flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Alerta de Vencimento Próximo (vence em {daysToExp} dias). Priorizar expedição e consumo deste lote conforme regra FEFO (First-Expired, First-Out).
+                </span>
+              </div>
+            )}
+
+            {/* TABELA DE DETALHAMENTO DE LOTES POR UNIDADE */}
+            <Card className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+              <Box className="p-3 bg-slate-50 dark:bg-slate-900/80 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <Typography variant="subtitle2" className="font-bold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-blue-600" />
+                  Rastreabilidade de Lotes e Validade por Filial
+                </Typography>
+                <Typography variant="caption" className="text-slate-400 text-[11px]">
+                  Total Físico: <strong>{totalStockAllBranches} {product.unit}</strong>
+                </Typography>
+              </Box>
+
+              <Table size="small">
+                <TableHead>
+                  <TableRow className="bg-slate-100/50 dark:bg-slate-900/40">
+                    <TableCell className="font-bold text-[11px] text-slate-500">Unidade Operacional</TableCell>
+                    <TableCell className="font-bold text-[11px] text-slate-500">Lote Registrado</TableCell>
+                    <TableCell align="center" className="font-bold text-[11px] text-slate-500">Saldo em Estoque</TableCell>
+                    <TableCell className="font-bold text-[11px] text-slate-500">Data de Validade</TableCell>
+                    <TableCell className="font-bold text-[11px] text-slate-500">Situação</TableCell>
+                    <TableCell className="font-bold text-[11px] text-slate-500">Ação Recomendada</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {batchPerBranch.map((item) => {
+                    const isExp = item.status === 'EXPIRED';
+                    const isNear = item.status === 'EXPIRING';
+
+                    return (
+                      <TableRow key={item.branchCode} hover className={isExp ? 'bg-rose-50/30 dark:bg-rose-950/20' : ''}>
+                        <TableCell>
+                          <div className="font-bold text-xs text-slate-800 dark:text-slate-200">
+                            Unidade {item.branchCode}
+                          </div>
+                          <div className="text-[10px] text-slate-400">{item.branchName}</div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-mono font-bold text-xs text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 px-2 py-0.5 rounded">
+                            {item.batchNumber}
+                          </span>
+                        </TableCell>
+                        <TableCell align="center">
+                          <span className={`font-bold text-xs ${item.quantity > 0 ? (isExp ? 'text-rose-600' : 'text-slate-800 dark:text-slate-200') : 'text-slate-400'}`}>
+                            {item.quantity} {product.unit}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                            {item.expirationDate ? new Date(item.expirationDate).toLocaleDateString('pt-BR') : 'Sem controle'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          {isExp ? (
+                            <Chip label={`Vencido (${Math.abs(item.daysToExp || 0)}d)`} color="error" size="small" className="text-[10px] font-bold h-5" />
+                          ) : isNear ? (
+                            <Chip label={`Vence em ${item.daysToExp}d`} color="warning" size="small" className="text-[10px] font-bold h-5" />
+                          ) : item.expirationDate ? (
+                            <Chip label="Em dia" color="success" size="small" className="text-[10px] font-bold h-5" />
+                          ) : (
+                            <span className="text-[10px] text-slate-400">N/A</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {isExp && item.quantity > 0 ? (
+                            <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-2 py-0.5 rounded inline-block">
+                              Segregar / Descarte
+                            </span>
+                          ) : isNear && item.quantity > 0 ? (
+                            <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-2 py-0.5 rounded inline-block">
+                              Consumo Prioritário
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-500">Operação Normal</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </Card>
           </Box>
         )}
 
