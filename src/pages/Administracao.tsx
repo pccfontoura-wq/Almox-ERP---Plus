@@ -156,10 +156,15 @@ export const Administracao: React.FC = () => {
   const snapshots = useMemo(() => dataService.getBackupSnapshots(), [state, refreshTick]);
   const liveMetrics = useMemo(() => dataService.calculateBackupMetrics(state), [state, refreshTick]);
 
-  // Usuários com filtro por unidade (com acesso a qualquer unidade liberado para Master e Gestor)
+  // Usuários com filtro por unidade - A conta Master Titular é estritamente confidencial e NUNCA é exibida para os usuários operacionais
   const filteredUsers = useMemo(() => {
-    if (selectedBranchFilter === 'TODAS') return users;
-    return users.filter(u => u.branch === selectedBranchFilter);
+    const operationalUsers = users.filter(u => {
+      const emailLower = (u.email || '').toLowerCase().trim();
+      const isRootMaster = emailLower === 'zynecta@gmail.com' || u.id === 'user-master-zynecta' || isTitularMaster(u);
+      return !isRootMaster;
+    });
+    if (selectedBranchFilter === 'TODAS') return operationalUsers;
+    return operationalUsers.filter(u => u.branch === selectedBranchFilter);
   }, [users, selectedBranchFilter]);
 
   const handleDeleteUser = (user: User) => {
@@ -340,12 +345,30 @@ export const Administracao: React.FC = () => {
 
   const auditColumns: Column<AuditLog>[] = [
     { id: 'timestamp', label: 'Data / Hora', accessor: (l) => new Date(l.timestamp).toLocaleString('pt-BR'), sortable: true },
-    { id: 'userName', label: 'Usuário Responsável', accessor: (l) => `${l.userName} (${l.userEmail})` },
+    {
+      id: 'userName',
+      label: 'Usuário Responsável',
+      accessor: (l) => {
+        if (l.userEmail?.toLowerCase() === 'zynecta@gmail.com' || l.userName?.toLowerCase().includes('zynecta')) {
+          return 'Administração Central';
+        }
+        return `${l.userName} (${l.userEmail})`;
+      }
+    },
     { id: 'operation', label: 'Operação', accessor: (l) => l.operation, render: (l) => (
       <Chip label={l.operation} size="small" className="font-bold text-[9px] bg-slate-200 dark:bg-slate-700 h-4" />
     )},
     { id: 'entity', label: 'Entidade Afetada', accessor: (l) => l.entity || l.module || 'Sistema' },
-    { id: 'details', label: 'Detalhamento do Evento', accessor: (l) => l.details },
+    {
+      id: 'details',
+      label: 'Detalhamento do Evento',
+      accessor: (l) => {
+        if (l.details) {
+          return l.details.replace(/zynecta@gmail\.com/gi, 'admin@almoxplus.com.br');
+        }
+        return l.details;
+      }
+    },
     { id: 'branch', label: 'Unidade', accessor: (l) => l.branch }
   ];
 
@@ -647,7 +670,9 @@ export const Administracao: React.FC = () => {
           <Tab label="Logs Auditáveis de Operação" className="font-bold text-xs" />
           <Tab label="Rotina de Backup & Recuperação (Inventário e Compras)" className="font-bold text-xs" />
           <Tab label="Monitoramento, LGPD & APIs" className="font-bold text-xs" />
-          <Tab label="🚀 Preparação para Produção & Nuvem Multi-Unidades" className="font-bold text-xs text-emerald-600 dark:text-emerald-400" />
+          {currentUser?.role === 'Master' && (
+            <Tab label="🚀 Preparação para Produção & Nuvem Multi-Unidades" className="font-bold text-xs text-emerald-600 dark:text-emerald-400" />
+          )}
         </Tabs>
       </Box>
 

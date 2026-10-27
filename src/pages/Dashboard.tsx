@@ -358,7 +358,7 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
           scrollButtons="auto"
           className="min-h-[44px]"
         >
-          <Tab icon={<Award className="w-4 h-4" />} iconPosition="start" label="1. Visão Master (Geral)" value="MASTER" className="font-bold text-xs min-h-[44px]" />
+          <Tab icon={<Award className="w-4 h-4" />} iconPosition="start" label="1. Visão Geral Corporativa" value="MASTER" className="font-bold text-xs min-h-[44px]" />
           <Tab icon={<Package className="w-4 h-4" />} iconPosition="start" label="2. Almoxarife" value="ALMOXARIFE" className="font-bold text-xs min-h-[44px]" />
           <Tab icon={<ShoppingCart className="w-4 h-4" />} iconPosition="start" label="3. Comprador" value="COMPRADOR" className="font-bold text-xs min-h-[44px]" />
           <Tab icon={<TrendingUp className="w-4 h-4" />} iconPosition="start" label="4. Diretoria & Gestão" value="DIRETORIA" className="font-bold text-xs min-h-[44px]" />

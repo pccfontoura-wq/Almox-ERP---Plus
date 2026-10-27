@@ -78,7 +78,7 @@ export const Login: React.FC = () => {
     const user = dataService.findUserByEmail(cleanEmail);
 
     if (!user) {
-      setRecoverError(`Nenhum usuário localizado com o e-mail "${recoverEmail}". Verifique o endereço ou consulte o administrador Master.`);
+      setRecoverError(`Nenhum usuário localizado com o e-mail "${recoverEmail}". Verifique o endereço ou consulte a Diretoria / Suporte do Sistema.`);
       return;
     }
 

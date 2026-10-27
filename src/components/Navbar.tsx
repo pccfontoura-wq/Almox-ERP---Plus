@@ -94,9 +94,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar, onNavigateToTab
 
           {/* Center: Branch Selector & Global Search Bar */}
           <Box className="hidden md:flex items-center gap-4 flex-1 max-w-[680px] mx-auto justify-center">
-            {/* City Branch Selector */}
             <Box className="flex items-center shrink-0">
-              {currentUser?.role === 'Master' ? (
+              {(currentUser?.role === 'Master' || currentUser?.role === 'Gestor') ? (
                 <FormControl size="small" variant="outlined" className="min-w-[150px]">
                   <Select
                     value={selectedBranch}
@@ -269,11 +268,6 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar, onNavigateToTab
 
         <Divider className="my-1" />
 
-        <MenuItem onClick={(e) => setRoleMenuAnchor(e.currentTarget)} className="text-xs font-semibold py-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800">
-          <AppIcon icon={Shield} size={16} className="mr-2.5 text-amber-500" />
-          Simular Perfil de Acesso
-        </MenuItem>
-
         <MenuItem onClick={() => { setUserMenuAnchor(null); onNavigateToTab?.('configuracoes'); }} className="text-xs font-semibold py-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800">
           <AppIcon icon={Settings} size={16} className="mr-2.5 text-blue-500" />
           Configurações do Perfil
@@ -284,61 +278,6 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar, onNavigateToTab
         <MenuItem onClick={() => { setUserMenuAnchor(null); logout(); }} className="text-xs font-semibold text-rose-600 dark:text-rose-400 py-2.5 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/50">
           <AppIcon icon={LogOut} size={16} className="mr-2.5 text-rose-600 dark:text-rose-400" />
           Sair do Sistema
-        </MenuItem>
-      </Menu>
-
-      {/* Role Selector Sub-menu */}
-      <Menu
-        anchorEl={roleMenuAnchor}
-        open={Boolean(roleMenuAnchor)}
-        onClose={() => setRoleMenuAnchor(null)}
-        slotProps={{
-          paper: {
-            elevation: 4,
-            className: "w-64 rounded-2xl border border-slate-200 dark:border-slate-800 dark:bg-slate-900 p-1.5 shadow-xl"
-          }
-        }}
-      >
-        <Box className="p-2 border-b border-slate-100 dark:border-slate-800 mb-1">
-          <Typography variant="caption" className="font-extrabold text-slate-500 dark:text-slate-400 text-[10px] uppercase tracking-wider block">
-            Simulação de Perfis de Acesso
-          </Typography>
-        </Box>
-
-        <MenuItem onClick={() => handleQuickRoleChange('Master', 'SP')} className="text-xs py-2 rounded-lg font-medium">
-          👑 <span className="ml-1.5 font-bold">Administrador Master</span> <span className="ml-auto text-[10px] text-slate-400">(Acesso Total)</span>
-        </MenuItem>
-
-        <MenuItem onClick={() => handleQuickRoleChange('Almoxarife', 'SP')} className="text-xs py-2 rounded-lg font-medium">
-          📦 <span className="ml-1.5 font-bold">Almoxarife</span> <span className="ml-auto text-[10px] text-slate-400">(Estoque & Doca)</span>
-        </MenuItem>
-
-        <MenuItem onClick={() => handleQuickRoleChange('Comprador', 'SP')} className="text-xs py-2 rounded-lg font-medium">
-          🛒 <span className="ml-1.5 font-bold">Comprador</span> <span className="ml-auto text-[10px] text-slate-400">(Compras & OCs)</span>
-        </MenuItem>
-
-        <MenuItem onClick={() => handleQuickRoleChange('Gestor', 'SP')} className="text-xs py-2 rounded-lg font-medium">
-          📊 <span className="ml-1.5 font-bold">Gestor</span> <span className="ml-auto text-[10px] text-slate-400">(Diretoria & BI)</span>
-        </MenuItem>
-
-        <Divider className="my-1.5" />
-
-        <Box className="px-2 py-1">
-          <Typography variant="caption" className="font-bold text-slate-400 text-[10px] uppercase tracking-wider block">
-            Operação Regional por Unidade
-          </Typography>
-        </Box>
-
-        {activeBranches.map(b => (
-          <MenuItem key={b.id} onClick={() => handleQuickRoleChange('Regular', b.code)} className="text-xs py-1.5 rounded-lg">
-            🏢 Regular — Unidade {b.code} ({b.city})
-          </MenuItem>
-        ))}
-
-        <Divider className="my-1.5" />
-
-        <MenuItem onClick={() => handleQuickRoleChange('Visitante', 'SP')} className="text-xs py-2 rounded-lg text-slate-600 dark:text-slate-300 font-medium">
-          👁️ <span className="ml-1.5 font-bold">Visitante</span> <span className="ml-auto text-[10px] text-slate-400">(Somente Leitura)</span>
         </MenuItem>
       </Menu>
 
