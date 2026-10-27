@@ -613,9 +613,24 @@ async function startServer() {
       p.includes("maior gasto") ||
       p.includes("mais gasta") ||
       p.includes("gasta mais") ||
+      p.includes("gastam mais") ||
+      p.includes("mais gastam") ||
+      p.includes("gastadora") ||
       p.includes("onde gasta mais") ||
       p.includes("onde mais gasta") ||
-      (p.includes("unidade") && (p.includes("maior") || p.includes("mais") || p.includes("ranking") || p.includes("comparat") || p.includes("gasto"))) ||
+      p.includes("quem gasta mais") ||
+      p.includes("quem mais gasta") ||
+      p.includes("gastamos mais") ||
+      p.includes("onde mais se gasta") ||
+      p.includes("unidade com maior") ||
+      p.includes("unidade que mais") ||
+      p.includes("filial que mais") ||
+      p.includes("filial com maior") ||
+      p.includes("maior despesa") ||
+      p.includes("maior consumo") ||
+      p.includes("maior custo") ||
+      (p.includes("unidade") && (p.includes("maior") || p.includes("mais") || p.includes("ranking") || p.includes("comparat") || p.includes("gasto") || p.includes("despesa") || p.includes("custo") || p.includes("consum"))) ||
+      (p.includes("filial") && (p.includes("maior") || p.includes("mais") || p.includes("ranking") || p.includes("comparat") || p.includes("gasto") || p.includes("despesa") || p.includes("custo") || p.includes("consum"))) ||
       ((p.includes("unidade") || p.includes("filial") || p.includes("filiais") || p.includes("unidades") || p.includes("onde gasta") || p.includes("quem gasta")) &&
       (p.includes("maior") || p.includes("mais gasta") || p.includes("gasta mais") || p.includes("ranking") || p.includes("comparat") || p.includes("distribui") || p.includes("gastos por") || p.includes("gasto por") || p.includes("despesas por") || p.includes("despesa por") || (p.includes("qual") && (p.includes("gasto") || p.includes("despesa") || p.includes("custo")))));
 

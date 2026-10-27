@@ -2,9 +2,12 @@ import React, { useState } from 'react';
 import {
   Box, Typography, Tabs, Tab, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Select, FormControl, InputLabel,
-  Alert, Chip, IconButton, Tooltip
+  Alert, Chip, IconButton, Tooltip, RadioGroup, FormControlLabel, Radio
 } from '@mui/material';
-import { ArrowRightLeft, Eye, Paperclip, Upload, Printer, FileText } from 'lucide-react';
+import {
+  ArrowRightLeft, Eye, Paperclip, Upload, Printer, FileText,
+  FileSpreadsheet, DownloadCloud, UploadCloud, CheckCircle2, AlertCircle
+} from 'lucide-react';
 
 import { dataService } from '../services/dataService';
 import { useAuth } from '../context/AuthContext';
@@ -14,6 +17,10 @@ import { DataTable, Column } from '../components/DataTable';
 import { Product, Movement, Transfer, Requisition, Branch, ProductAttachment } from '../types';
 import { ProductDetailModal } from '../components/ProductDetailModal';
 import { exportRequisitionPDF } from '../utils/exportUtils';
+import {
+  downloadProductCSVTemplate, parseProductsCSV,
+  CSVParseResult, PRODUCT_CSV_COLUMNS
+} from '../utils/csvProductUtils';
 
 export const Almoxarifado: React.FC = () => {
   const { currentUser } = useAuth();
@@ -53,6 +60,53 @@ export const Almoxarifado: React.FC = () => {
   });
 
   const [formError, setFormError] = useState<string | null>(null);
+
+  // CSV Import Modal & State
+  const [csvModalOpen, setCsvModalOpen] = useState(false);
+  const [csvParseResult, setCsvParseResult] = useState<CSVParseResult | null>(null);
+  const [csvFileName, setCsvFileName] = useState('');
+  const [csvImportMode, setCsvImportMode] = useState<'MERGE' | 'REPLACE'>('MERGE');
+  const [csvImportSuccess, setCsvImportSuccess] = useState<string | null>(null);
+  const [csvError, setCsvError] = useState<string | null>(null);
+
+  const handleCsvFileUpload = (file: File) => {
+    setCsvFileName(file.name);
+    setCsvError(null);
+    setCsvImportSuccess(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const parsed = parseProductsCSV(text);
+        if (parsed.errors.length > 0) {
+          setCsvError(parsed.errors.join(' '));
+          setCsvParseResult(null);
+        } else {
+          setCsvParseResult(parsed);
+        }
+      } catch (err: any) {
+        setCsvError('Erro ao ler arquivo CSV: ' + err.message);
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
+
+  const handleConfirmCsvImport = () => {
+    if (!csvParseResult || !currentUser) return;
+    try {
+      const res = dataService.importProductsBulk(csvParseResult.products, currentUser, csvImportMode);
+      setCsvImportSuccess(`🎉 Importação concluída! ${res.created} produtos novos criados e ${res.updated} atualizados.`);
+      refreshData();
+      setTimeout(() => {
+        setCsvModalOpen(false);
+        setCsvParseResult(null);
+        setCsvFileName('');
+        setCsvImportSuccess(null);
+      }, 2500);
+    } catch (err: any) {
+      setCsvError(err.message || 'Erro ao importar produtos.');
+    }
+  };
 
   const state = dataService.getState();
   const products = dataService.getProducts(selectedBranch);
@@ -412,27 +466,75 @@ export const Almoxarifado: React.FC = () => {
       </Box>
 
       {currentTab === 0 && (
-        <DataTable
-          title="Catálogo Geral de Produtos"
-          subTitle={`Estoque ativo para a unidade: ${selectedBranch}`}
-          columns={productColumns}
-          data={products}
-          onAddClick={() => {
-            setEditingProduct({
-              code: `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
-              name: '',
-              category: 'EPI & Segurança',
-              unit: 'UN',
-              minStock: 10,
-              maxStock: 100,
-              unitPrice: 50,
-              locationSlot: 'A1'
-            });
-            setProductModalOpen(true);
-          }}
-          addButtonLabel="Cadastrar Novo Produto"
-          canEditOrAdd={canEdit}
-        />
+        <Box className="space-y-4">
+          <Box className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-blue-50 via-indigo-50/40 to-slate-50 dark:from-slate-900 dark:via-blue-950/20 dark:to-slate-900 rounded-2xl border border-blue-200 dark:border-blue-900 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs">
+                <FileSpreadsheet className="w-5 h-5" />
+              </div>
+              <div>
+                <Typography className="font-extrabold text-xs sm:text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                  Carga em Lote de Produtos Reais (Planilha / CSV)
+                  <Chip label="Importação Rápida" size="small" className="text-[10px] h-4 font-bold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" />
+                </Typography>
+                <Typography variant="caption" className="text-slate-500 text-[11px] block">
+                  Cadastre ou atualize centenas de produtos e saldos das 4 unidades em segundos via arquivo CSV.
+                </Typography>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<DownloadCloud className="w-4 h-4 text-blue-600" />}
+                onClick={downloadProductCSVTemplate}
+                className="text-xs font-bold border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-white dark:hover:bg-slate-800"
+              >
+                Baixar Modelo CSV
+              </Button>
+              {canEdit && (
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<UploadCloud className="w-4 h-4" />}
+                  onClick={() => {
+                    setCsvParseResult(null);
+                    setCsvFileName('');
+                    setCsvError(null);
+                    setCsvImportSuccess(null);
+                    setCsvModalOpen(true);
+                  }}
+                  className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
+                >
+                  Importar Produtos (CSV)
+                </Button>
+              )}
+            </div>
+          </Box>
+
+          <DataTable
+            title="Catálogo Geral de Produtos"
+            subTitle={`Estoque ativo para a unidade: ${selectedBranch}`}
+            columns={productColumns}
+            data={products}
+            onAddClick={() => {
+              setEditingProduct({
+                code: `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
+                name: '',
+                category: 'EPI & Segurança',
+                unit: 'UN',
+                minStock: 10,
+                maxStock: 100,
+                unitPrice: 50,
+                locationSlot: 'A1'
+              });
+              setProductModalOpen(true);
+            }}
+            addButtonLabel="Cadastrar Novo Produto"
+            canEditOrAdd={canEdit}
+          />
+        </Box>
       )}
 
       {currentTab === 1 && (
@@ -832,6 +934,220 @@ export const Almoxarifado: React.FC = () => {
             <Button type="submit" variant="contained" color="primary">Enviar Solicitação</Button>
           </DialogActions>
         </form>
+      </Dialog>
+
+      {/* CSV PRODUCT IMPORT MODAL */}
+      <Dialog
+        open={csvModalOpen}
+        onClose={() => setCsvModalOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle className="font-bold flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+            <span>Importação em Lote de Produtos via Planilha / CSV</span>
+          </div>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<DownloadCloud className="w-3.5 h-3.5" />}
+            onClick={downloadProductCSVTemplate}
+            className="text-[11px] font-bold"
+          >
+            Baixar Modelo CSV
+          </Button>
+        </DialogTitle>
+
+        <DialogContent dividers className="space-y-4 py-4">
+          {csvImportSuccess && (
+            <Alert severity="success" icon={<CheckCircle2 className="w-5 h-5" />} className="rounded-xl">
+              {csvImportSuccess}
+            </Alert>
+          )}
+
+          {csvError && (
+            <Alert severity="error" icon={<AlertCircle className="w-5 h-5" />} className="rounded-xl">
+              {csvError}
+            </Alert>
+          )}
+
+          {/* Guidelines accordion/card */}
+          <Box className="p-3.5 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2 text-xs">
+            <Typography className="font-extrabold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <span>📋 Estrutura & Ordem das Colunas no Arquivo CSV:</span>
+            </Typography>
+            <Typography variant="body2" className="text-slate-600 dark:text-slate-400 text-[11px] leading-relaxed">
+              O arquivo pode ser gerado no <strong>Microsoft Excel, Google Planilhas ou LibreOffice</strong> e salvo como <strong>CSV separado por ponto e vírgula (;) ou vírgula (,)</strong>.
+            </Typography>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1 text-[11px]">
+              {PRODUCT_CSV_COLUMNS.map(col => (
+                <div key={col.key} className="p-1.5 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold font-mono text-[10px] text-blue-700 dark:text-blue-400">{col.key}</span>
+                    {col.required ? (
+                      <span className="text-[9px] font-extrabold text-rose-600">Obrigatório</span>
+                    ) : (
+                      <span className="text-[9px] text-slate-400">Opcional</span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-slate-500 truncate" title={col.desc}>{col.label}</div>
+                </div>
+              ))}
+            </div>
+          </Box>
+
+          {/* File Upload Box */}
+          <div className="p-5 border-2 border-dashed border-blue-300 dark:border-blue-800 rounded-2xl bg-blue-50/40 dark:bg-blue-950/20 text-center space-y-3">
+            <UploadCloud className="w-8 h-8 text-blue-600 mx-auto" />
+            <div>
+              <Typography className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200">
+                Selecione ou arraste seu arquivo .CSV aqui
+              </Typography>
+              <Typography variant="caption" className="text-slate-500 block text-[11px]">
+                Compatível com arquivos exportados do ERP legado, SAP, Totvs, Excel ou Google Sheets.
+              </Typography>
+            </div>
+
+            <div className="flex items-center justify-center gap-3">
+              <input
+                id="csv-file-input"
+                type="file"
+                accept=".csv, text/csv, application/vnd.ms-excel"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleCsvFileUpload(file);
+                }}
+              />
+              <label htmlFor="csv-file-input">
+                <Button
+                  component="span"
+                  variant="contained"
+                  size="small"
+                  startIcon={<Upload className="w-4 h-4" />}
+                  className="font-bold text-xs bg-blue-600 hover:bg-blue-700"
+                >
+                  Procurar Arquivo CSV no Computador
+                </Button>
+              </label>
+              {csvFileName && (
+                <Chip
+                  label={csvFileName}
+                  color="primary"
+                  variant="outlined"
+                  size="small"
+                  className="font-bold text-xs"
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Mode Selection */}
+          <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div>
+              <Typography className="font-bold text-xs text-slate-800 dark:text-slate-200">
+                Modo de Gravação dos Dados:
+              </Typography>
+              <Typography variant="caption" className="text-slate-500 text-[11px] block">
+                Escolha se deseja mesclar com os itens existentes ou substituir o catálogo.
+              </Typography>
+            </div>
+
+            <RadioGroup
+              row
+              value={csvImportMode}
+              onChange={(e) => setCsvImportMode(e.target.value as any)}
+              className="text-xs"
+            >
+              <FormControlLabel
+                value="MERGE"
+                control={<Radio size="small" />}
+                label={<span className="text-xs font-semibold">Atualizar / Mesclar (Recomendado)</span>}
+              />
+              <FormControlLabel
+                value="REPLACE"
+                control={<Radio size="small" color="error" />}
+                label={<span className="text-xs font-semibold text-rose-600">Substituir Catálogo</span>}
+              />
+            </RadioGroup>
+          </div>
+
+          {/* Parsed Preview Table */}
+          {csvParseResult && csvParseResult.products.length > 0 && (
+            <div className="space-y-2 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-xs">
+              <div className="p-3 bg-slate-100 dark:bg-slate-800 flex items-center justify-between">
+                <Typography className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  Pré-visualização: {csvParseResult.products.length} produtos válidos identificados
+                </Typography>
+                {csvParseResult.warnings.length > 0 && (
+                  <Chip
+                    label={`${csvParseResult.warnings.length} avisos`}
+                    size="small"
+                    color="warning"
+                    className="text-[10px] h-4 font-bold"
+                  />
+                )}
+              </div>
+
+              <div className="max-h-60 overflow-y-auto">
+                <table className="w-full text-[11px] text-left border-collapse">
+                  <thead className="bg-slate-50 dark:bg-slate-900 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-800">
+                    <tr>
+                      <th className="p-2">SKU</th>
+                      <th className="p-2">Nome do Produto</th>
+                      <th className="p-2">Categoria</th>
+                      <th className="p-2 text-center">UN</th>
+                      <th className="p-2 text-right">Preço</th>
+                      <th className="p-2 text-center">SP</th>
+                      <th className="p-2 text-center">RJ</th>
+                      <th className="p-2 text-center">BSB</th>
+                      <th className="p-2 text-center">SJRP</th>
+                      <th className="p-2">Prateleira</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {csvParseResult.products.slice(0, 15).map((p, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="p-2 font-mono font-bold text-blue-700 dark:text-blue-400">{p.code}</td>
+                        <td className="p-2 font-medium">{p.name}</td>
+                        <td className="p-2 text-slate-500">{p.category}</td>
+                        <td className="p-2 text-center">{p.unit}</td>
+                        <td className="p-2 text-right font-mono font-bold">R$ {p.unitPrice.toFixed(2)}</td>
+                        <td className="p-2 text-center font-bold text-slate-700 dark:text-slate-300">{p.stockByBranch.SP || 0}</td>
+                        <td className="p-2 text-center font-bold text-slate-700 dark:text-slate-300">{p.stockByBranch.RJ || 0}</td>
+                        <td className="p-2 text-center font-bold text-slate-700 dark:text-slate-300">{p.stockByBranch.BSB || 0}</td>
+                        <td className="p-2 text-center font-bold text-slate-700 dark:text-slate-300">{p.stockByBranch.SJRP || 0}</td>
+                        <td className="p-2 text-slate-400 font-mono">{p.locationSlot}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {csvParseResult.products.length > 15 && (
+                <div className="p-2 text-center bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 text-[10px] text-slate-500">
+                  ...e mais {csvParseResult.products.length - 15} produtos adicionais no arquivo.
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+
+        <DialogActions className="px-6 py-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <Button onClick={() => setCsvModalOpen(false)}>Cancelar</Button>
+          <Button
+            variant="contained"
+            color="primary"
+            disabled={!csvParseResult || csvParseResult.products.length === 0}
+            onClick={handleConfirmCsvImport}
+            startIcon={<UploadCloud className="w-4 h-4" />}
+            className="font-bold text-xs py-1.5 px-4 bg-blue-600 hover:bg-blue-700"
+          >
+            Confirmar Importação de {csvParseResult?.products.length || 0} Produtos
+          </Button>
+        </DialogActions>
       </Dialog>
 
       {/* 7-Tab Product Detail Modal */}

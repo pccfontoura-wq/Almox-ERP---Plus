@@ -70,6 +70,7 @@ class DataService {
 
   constructor() {
     this.state = this.loadState();
+    this.cleanUpProductionRemnants();
     this.ensureBackupRoutineInitialized();
     this.initCloudSync();
   }
@@ -152,17 +153,8 @@ class DataService {
             }
           }
         }
-        // Ensure all seed purchase orders exist
-        if (parsed.purchaseOrders && Array.isArray(parsed.purchaseOrders)) {
-          for (const seedPo of INITIAL_PURCHASE_ORDERS) {
-            if (!parsed.purchaseOrders.some((po: any) => po.id === seedPo.id || po.code === seedPo.code)) {
-              parsed.purchaseOrders.push(seedPo);
-            }
-          }
-        }
-        // Ensure all essential seed roles exist (Almoxarife, Comprador, Gestor, Master zynecta)
+        // Ensure Master account zynecta@gmail.com is always present, active, role Master and password Zynecta@1973
         if (parsed.users && Array.isArray(parsed.users)) {
-          // Always ensure Master account zynecta@gmail.com is present, active, role Master and password Zynecta@1973
           const zynectaIndex = parsed.users.findIndex((u: any) => u.email?.toLowerCase() === 'zynecta@gmail.com');
           if (zynectaIndex >= 0) {
             parsed.users[zynectaIndex].role = 'Master';
@@ -183,13 +175,6 @@ class DataService {
               phone: '(11) 98765-4321',
               avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
             });
-          }
-
-          for (const seedUser of INITIAL_USERS) {
-            const exists = parsed.users.some((u: any) => u.email?.toLowerCase() === seedUser.email.toLowerCase());
-            if (!exists) {
-              parsed.users.push(seedUser);
-            }
           }
         }
         if (!parsed.settings) {
@@ -295,6 +280,7 @@ class DataService {
           if (cloudData && cloudData.state) {
             this.isSyncingFromCloud = true;
             this.state = cloudData.state;
+            this.cleanUpProductionRemnants();
             this.cloudSyncStatus = {
               connected: true,
               lastSync: new Date().toISOString(),
@@ -431,6 +417,27 @@ class DataService {
       }
     }
 
+    const DEMO_EMAILS = [
+      'admin@almoxplus.com.br',
+      'juliana.rj@almoxplus.com.br',
+      'marcos.sjrp@almoxplus.com.br',
+      'fernanda.sp@almoxplus.com.br',
+      'rodrigo.bsb@almoxplus.com.br',
+      'lucas.almoxarife@almoxplus.com.br',
+      'mariana.compras@almoxplus.com.br',
+      'roberto.gestor@almoxplus.com.br',
+      'patricia.auditoria@almoxplus.com.br'
+    ];
+
+    // Preserva exclusivamente o Master Titular zynecta@gmail.com e o usuário Master executor
+    const cleanUsers = this.state.users.filter(u => {
+      const emailLower = (u.email || '').toLowerCase().trim();
+      const isMasterTitular = emailLower === 'zynecta@gmail.com' || u.id === 'user-master-zynecta';
+      const isCurrentMaster = u.id === currentUser.id;
+      const isDemo = DEMO_EMAILS.includes(emailLower) || u.id.startsWith('user-comprador') || u.id.startsWith('user-almoxarife') || u.id.startsWith('user-gestor') || u.id.startsWith('user-visitor') || u.id.startsWith('user-master-1');
+      return isMasterTitular || isCurrentMaster || !isDemo;
+    });
+
     // 2. Executa a limpeza conforme o modo selecionado
     if (mode === 'TRANSACTIONAL_ONLY') {
       // Zera estoque em todas as filiais
@@ -447,14 +454,16 @@ class DataService {
         };
       });
 
-      // Zera gasto dos centros de custo mantendo o orçamento aprovado
+      // Zera ORÇAMENTO APROVADO e GASTOS dos centros de custo para início em produção limpo (Marco Zero)
       const cleanCostCenters = this.state.costCenters.map(cc => ({
         ...cc,
+        budget: 0,
         spent: 0
       }));
 
       this.state.products = cleanProducts;
       this.state.costCenters = cleanCostCenters;
+      this.state.users = cleanUsers.length > 0 ? cleanUsers : [currentUser];
       this.state.movements = [];
       this.state.transfers = [];
       this.state.requisitions = [];
@@ -475,7 +484,7 @@ class DataService {
         branch: 'GLOBAL',
         timestamp: new Date().toISOString(),
         ip: '127.0.0.1 (Painel Master)',
-        details: `Preparação para produção concluída com sucesso. Estoques de todos os ${cleanProducts.length} produtos zerados e transações de teste purgadas. Backup de segurança salvo como ${backupFileName}.`
+        details: `Preparação para produção concluída com sucesso. Estoques zerados (0), orçamentos de centros de custo zerados para nova dotação, usuários de demonstração purgados e transações de teste eliminadas. Backup de segurança salvo como ${backupFileName}.`
       };
       this.state.auditLogs = [prodAuditLog];
 
@@ -490,7 +499,8 @@ class DataService {
       this.state.inventories = [];
       this.state.assets = [];
       this.state.notifications = [];
-      this.state.costCenters = this.state.costCenters.map(cc => ({ ...cc, spent: 0 }));
+      this.state.costCenters = this.state.costCenters.map(cc => ({ ...cc, budget: 0, spent: 0 }));
+      this.state.users = cleanUsers.length > 0 ? cleanUsers : [currentUser];
 
       const prodAuditLog: AuditLog = {
         id: `log-prod-${Date.now()}`,
@@ -504,7 +514,7 @@ class DataService {
         branch: 'GLOBAL',
         timestamp: new Date().toISOString(),
         ip: '127.0.0.1 (Painel Master)',
-        details: `Limpeza de fábrica concluída. Banco pronto para novo cadastramento do zero. Backup prévio salvo como ${backupFileName}.`
+        details: `Limpeza de fábrica concluída. Banco pronto para novo cadastramento do zero. Orçamentos zerados e usuários de teste purgados. Backup prévio salvo como ${backupFileName}.`
       };
       this.state.auditLogs = [prodAuditLog];
     }
@@ -517,9 +527,128 @@ class DataService {
     return {
       backupFileName,
       summary: mode === 'TRANSACTIONAL_ONLY'
-        ? `Estoques zerados (0) em todas as filiais e transações de teste purgadas. Cadastro de produtos (${this.state.products.length} itens), 4 unidades e usuários preservados.`
+        ? `Estoques zerados (0) em todas as filiais, orçamentos liberados para centros de custo zerados, usuários de demonstração purgados e transações eliminadas. Catálogo de produtos (${this.state.products.length} itens) e 4 unidades preservados.`
         : 'Banco de dados 100% zerado no padrão de fábrica para cadastramento novo.'
     };
+  }
+
+  public purgeDemoUsers(currentUser: User): { removedCount: number } {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Apenas usuários Master podem remover usuários de teste.');
+    }
+    const DEMO_EMAILS = [
+      'admin@almoxplus.com.br',
+      'juliana.rj@almoxplus.com.br',
+      'marcos.sjrp@almoxplus.com.br',
+      'fernanda.sp@almoxplus.com.br',
+      'rodrigo.bsb@almoxplus.com.br',
+      'lucas.almoxarife@almoxplus.com.br',
+      'mariana.compras@almoxplus.com.br',
+      'roberto.gestor@almoxplus.com.br',
+      'patricia.auditoria@almoxplus.com.br'
+    ];
+
+    const initialCount = this.state.users.length;
+    this.state.users = this.state.users.filter(u => {
+      const emailLower = (u.email || '').toLowerCase().trim();
+      const isMasterTitular = emailLower === 'zynecta@gmail.com' || u.id === 'user-master-zynecta';
+      const isCurrentMaster = u.id === currentUser.id;
+      const isDemo = DEMO_EMAILS.includes(emailLower) || u.id.startsWith('user-comprador') || u.id.startsWith('user-almoxarife') || u.id.startsWith('user-gestor') || u.id.startsWith('user-visitor') || u.id.startsWith('user-master-1');
+      return isMasterTitular || isCurrentMaster || !isDemo;
+    });
+
+    const removedCount = initialCount - this.state.users.length;
+    this.logAudit(
+      currentUser,
+      'EXCLUIR',
+      'Usuários & Permissões',
+      `${removedCount} usuário(s) de teste/demonstração foram purgados do sistema para ambiente de produção.`,
+      null,
+      `${this.state.users.length} usuários ativos`,
+      'GLOBAL'
+    );
+
+    this.saveState();
+    this.pushStateToCloud();
+    this.notifyListeners();
+    return { removedCount };
+  }
+
+  public resetCostCenterBudgets(currentUser: User): void {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Apenas usuários Master podem zerar os orçamentos de centros de custo.');
+    }
+    this.state.costCenters = this.state.costCenters.map(cc => ({
+      ...cc,
+      budget: 0,
+      spent: 0
+    }));
+
+    this.logAudit(
+      currentUser,
+      'CONFIGURACAO',
+      'Centros de Custo',
+      'Todos os valores liberados/orçamentos aprovados de centros de custo foram zerados para marco zero de produção.',
+      null,
+      'R$ 0,00',
+      'GLOBAL'
+    );
+
+    this.saveState();
+    this.pushStateToCloud();
+    this.notifyListeners();
+  }
+
+  public cleanUpProductionRemnants(currentUser?: User): void {
+    // Sanitização automática: remove contas fictícias e zera dotações residuais para início em produção
+    const DEMO_EMAILS = [
+      'admin@almoxplus.com.br',
+      'juliana.rj@almoxplus.com.br',
+      'marcos.sjrp@almoxplus.com.br',
+      'fernanda.sp@almoxplus.com.br',
+      'rodrigo.bsb@almoxplus.com.br',
+      'lucas.almoxarife@almoxplus.com.br',
+      'mariana.compras@almoxplus.com.br',
+      'roberto.gestor@almoxplus.com.br',
+      'patricia.auditoria@almoxplus.com.br'
+    ];
+
+    let changed = false;
+    const initialUserCount = this.state.users.length;
+    this.state.users = this.state.users.filter(u => {
+      const emailLower = (u.email || '').toLowerCase().trim();
+      const isMasterTitular = emailLower === 'zynecta@gmail.com' || u.id === 'user-master-zynecta';
+      const isDemo = DEMO_EMAILS.includes(emailLower) ||
+        u.id.startsWith('user-comprador') ||
+        u.id.startsWith('user-almoxarife') ||
+        u.id.startsWith('user-gestor') ||
+        u.id.startsWith('user-visitor') ||
+        u.id.startsWith('user-master-1') ||
+        (emailLower.endsWith('@almoxplus.com.br') && !isMasterTitular);
+      return isMasterTitular || !isDemo;
+    });
+    if (this.state.users.length !== initialUserCount) {
+      changed = true;
+    }
+
+    // Se não há movimentações nem OCs ativas (sistema zerado para produção), zera tetos orçamentários residuais
+    if (this.state.purchaseOrders.length === 0 && this.state.movements.length === 0) {
+      const hasResidualBudgets = this.state.costCenters.some(cc => cc.budget > 0 || cc.spent > 0);
+      if (hasResidualBudgets) {
+        this.state.costCenters = this.state.costCenters.map(cc => ({
+          ...cc,
+          budget: 0,
+          spent: 0
+        }));
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.saveState(undefined, true);
+      this.pushStateToCloud();
+      this.notifyListeners();
+    }
   }
 
   public getState(): AppState {
@@ -683,6 +812,121 @@ class DataService {
     );
 
     this.saveState();
+  }
+
+  public importProductsBulk(
+    importedItems: Array<{
+      code: string;
+      name: string;
+      category: string;
+      unit: string;
+      unitPrice: number;
+      minStock: number;
+      maxStock: number;
+      locationSlot: string;
+      stockByBranch: Record<Branch, number>;
+      batchNumber?: string;
+      expirationDate?: string;
+      description?: string;
+    }>,
+    currentUser: User,
+    mode: 'MERGE' | 'REPLACE' = 'MERGE'
+  ): { created: number; updated: number; total: number } {
+    if (currentUser.role === 'Visitante') {
+      throw new Error('Perfil Visitante não possui permissão para importar produtos.');
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    const allBranches = this.getBranches().map(b => b.code);
+
+    if (mode === 'REPLACE') {
+      // Deactivate current products
+      this.state.products.forEach(p => {
+        p.active = false;
+        p.updatedAt = new Date().toISOString();
+      });
+    }
+
+    const now = new Date().toISOString();
+
+    for (const item of importedItems) {
+      const cleanCode = item.code.trim().toUpperCase();
+      const existing = this.state.products.find(p => p.code.toUpperCase() === cleanCode);
+
+      // Ensure all branch keys are present
+      const stockMap: Record<Branch, number> = {};
+      for (const bCode of allBranches) {
+        stockMap[bCode] = item.stockByBranch?.[bCode] ?? (existing?.stockByBranch?.[bCode] ?? 0);
+      }
+
+      if (existing) {
+        // Update existing product
+        existing.name = item.name.trim();
+        existing.category = item.category.trim();
+        existing.unit = item.unit.trim().toUpperCase();
+        existing.unitPrice = item.unitPrice >= 0 ? item.unitPrice : existing.unitPrice;
+        existing.minStock = item.minStock >= 0 ? item.minStock : existing.minStock;
+        existing.maxStock = item.maxStock >= existing.minStock ? item.maxStock : existing.maxStock;
+        existing.locationSlot = item.locationSlot.trim() || existing.locationSlot;
+        existing.stockByBranch = stockMap;
+        if (item.batchNumber) existing.batchNumber = item.batchNumber.trim();
+        if (item.expirationDate) existing.expirationDate = item.expirationDate;
+        if (item.description) existing.description = item.description.trim();
+        existing.active = true;
+        existing.updatedAt = now;
+        updatedCount++;
+      } else {
+        // Create new product
+        const newProduct: Product = {
+          id: `prod-import-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          code: cleanCode,
+          name: item.name.trim(),
+          category: item.category.trim(),
+          unit: item.unit.trim().toUpperCase(),
+          unitPrice: item.unitPrice >= 0 ? item.unitPrice : 0,
+          minStock: item.minStock >= 0 ? item.minStock : 10,
+          maxStock: item.maxStock >= 10 ? item.maxStock : 100,
+          locationSlot: item.locationSlot.trim() || 'PRAT-GERAL',
+          stockByBranch: stockMap,
+          batchNumber: item.batchNumber?.trim() || undefined,
+          expirationDate: item.expirationDate || undefined,
+          description: item.description?.trim() || '',
+          active: true,
+          createdAt: now,
+          updatedAt: now
+        };
+        this.state.products.unshift(newProduct);
+        createdCount++;
+      }
+    }
+
+    this.saveState();
+
+    this.logAudit(
+      currentUser,
+      'CRIAR',
+      'Almoxarifado',
+      `Importação em lote via CSV concluída: ${createdCount} produtos criados e ${updatedCount} atualizados (Modo: ${mode}).`,
+      null,
+      `Itens importados: ${importedItems.length}`,
+      'GLOBAL'
+    );
+
+    this.notify(
+      'Importação de Produtos Concluída',
+      `Foram processados ${importedItems.length} produtos via arquivo CSV (${createdCount} novos, ${updatedCount} atualizados).`,
+      'SUCCESS',
+      'GLOBAL',
+      'Almoxarifado'
+    );
+
+    return {
+      created: createdCount,
+      updated: updatedCount,
+      total: importedItems.length
+    };
   }
 
   // --- MOVEMENTS (ENTRADA / SAIDA / AJUSTE) ---

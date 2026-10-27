@@ -7,7 +7,8 @@ import {
 import {
   Calculator, Plus, ShoppingBag, Truck, Package, HelpCircle, Eye,
   BarChart3, Scale, Layers, CheckCircle2, AlertTriangle, ArrowUpRight,
-  TrendingDown, TrendingUp, Info, DollarSign, ArrowRightLeft, ShieldCheck, Sliders
+  TrendingDown, TrendingUp, Info, DollarSign, ArrowRightLeft, ShieldCheck, Sliders,
+  RotateCcw
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -450,11 +451,32 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
                   size="small"
                   variant="outlined"
                   color="secondary"
-                  startIcon={<ArrowRightLeft className="w-4 h-4" />}
                   onClick={() => handleOpenTransfer()}
                   className="font-bold text-xs capitalize"
                 >
                   Remanejar Verba
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<RotateCcw className="w-4 h-4 text-amber-600" />}
+                  onClick={() => {
+                    if (window.confirm('Atenção: Deseja zerar os orçamentos aprovados de todos os centros de custo para R$ 0,00 (Marco Zero de Produção)?')) {
+                      if (!currentUser) return;
+                      try {
+                        dataService.resetCostCenterBudgets(currentUser);
+                        refreshData();
+                        setActionSuccess('Orçamentos aprovados de todos os centros de custo foram zerados para R$ 0,00 com sucesso.');
+                        setTimeout(() => setActionSuccess(null), 5000);
+                      } catch (err: any) {
+                        setFormError(err.message || 'Erro ao zerar orçamentos.');
+                      }
+                    }
+                  }}
+                  className="font-bold text-xs capitalize text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700"
+                >
+                  Zerar Orçamentos (Produção)
                 </Button>
               </>
             )}

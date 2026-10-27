@@ -291,9 +291,24 @@ export const AssistenteIA: React.FC = () => {
       p.includes('maior gasto') ||
       p.includes('mais gasta') ||
       p.includes('gasta mais') ||
+      p.includes('gastam mais') ||
+      p.includes('mais gastam') ||
+      p.includes('gastadora') ||
       p.includes('onde gasta mais') ||
       p.includes('onde mais gasta') ||
-      (p.includes('unidade') && (p.includes('maior') || p.includes('mais') || p.includes('ranking') || p.includes('comparat') || p.includes('gasto'))) ||
+      p.includes('quem gasta mais') ||
+      p.includes('quem mais gasta') ||
+      p.includes('gastamos mais') ||
+      p.includes('onde mais se gasta') ||
+      p.includes('unidade com maior') ||
+      p.includes('unidade que mais') ||
+      p.includes('filial que mais') ||
+      p.includes('filial com maior') ||
+      p.includes('maior despesa') ||
+      p.includes('maior consumo') ||
+      p.includes('maior custo') ||
+      (p.includes('unidade') && (p.includes('maior') || p.includes('mais') || p.includes('ranking') || p.includes('comparat') || p.includes('gasto') || p.includes('despesa') || p.includes('custo') || p.includes('consum'))) ||
+      (p.includes('filial') && (p.includes('maior') || p.includes('mais') || p.includes('ranking') || p.includes('comparat') || p.includes('gasto') || p.includes('despesa') || p.includes('custo') || p.includes('consum'))) ||
       ((p.includes('unidade') || p.includes('filial') || p.includes('filiais') || p.includes('unidades') || p.includes('onde gasta') || p.includes('quem gasta')) &&
       (p.includes('maior') || p.includes('mais gasta') || p.includes('gasta mais') || p.includes('ranking') || p.includes('comparat') || p.includes('distribui') || p.includes('gastos por') || p.includes('gasto por') || p.includes('despesas por') || p.includes('despesa por') || (p.includes('qual') && (p.includes('gasto') || p.includes('despesa') || p.includes('custo')))));
 
@@ -358,10 +373,20 @@ export const AssistenteIA: React.FC = () => {
       const pctPO = grandTotalPO > 0 ? ((topUnitPO.totalPO / grandTotalPO) * 100).toFixed(1) : '0';
 
       let resp = `### 🏢 Análise Comparativa de Gastos por Unidade Operacional\n\n`;
-      resp += `A unidade com o **maior gasto total consolidado** no ERP Almox Plus é a **Unidade ${topUnitTotal.branch} (${topUnitTotal.name.split(' ')[0]} ${topUnitTotal.name.split(' ')[1]})**, somando um dispêndio acumulado de **${fmt(topUnitTotal.totalGasto)}** (representando **${pctTotal}%** de todos os gastos corporativos da empresa).\n\n`;
-      resp += `Ao detalharmos a natureza contábil dos gastos, observamos dois comportamentos fundamentais:\n\n`;
-      resp += `1. **Maior Consumo em Centros de Custo (Operação Contínua & TI):** A **Unidade ${topUnitCC.branch}** lidera isoladamente com **${fmt(topUnitCC.spentCC)}** consumidos (com grande peso do setor de TI).\n`;
-      resp += `2. **Maior Gasto em Novas Aquisições / Ordens de Compra (OCs):** A **Unidade ${topUnitPO.branch}** lidera com **${fmt(topUnitPO.totalPO)}** em compras (**${pctPO}%** do valor total de OCs corporativas), impulsionada pela ordem emergencial \`OC-2025-088\` (R$ 14.850,00, que excedeu o teto orçamentário).\n\n`;
+      if (grandTotalConsolidated === 0) {
+        resp += `No momento, o sistema está configurado em **Marco Zero (Produção Limpa)**: todas as 4 unidades operacionais (SP, RJ, BSB e SJRP) possuem **R$ 0,00 em gastos e ordens de compra registradas**.\n\n`;
+        resp += `#### 📊 Posição das Unidades Operacionais (Aguardando Novas Lotações):\n`;
+        branchStats.forEach(b => {
+          resp += `- **Unidade ${b.branch} (${b.name}):** Gasto de ${fmt(b.totalGasto)} | Orçamento Alocado: ${fmt(b.budget)} | OCs Emitidas: 0\n`;
+        });
+        resp += `\n💡 **Status:** Sistema pronto para registrar as primeiras requisições, pedidos de compra e despesas reais de cada filial.`;
+        return resp;
+      }
+
+      resp += `A unidade com o **maior gasto total consolidado** no ERP Almox Plus é a **Unidade ${topUnitTotal.branch} (${topUnitTotal.name.split(' ')[0]} ${topUnitTotal.name.split(' ')[1] || ''})**, somando um dispêndio acumulado de **${fmt(topUnitTotal.totalGasto)}** (representando **${pctTotal}%** de todos os gastos corporativos da empresa).\n\n`;
+      resp += `Ao detalharmos a natureza contábil dos gastos, observamos o seguinte comportamento:\n\n`;
+      resp += `1. **Consumo em Centros de Custo:** A **Unidade ${topUnitCC.branch}** soma **${fmt(topUnitCC.spentCC)}** consumidos.\n`;
+      resp += `2. **Aquisições em Ordens de Compra (OCs):** A **Unidade ${topUnitPO.branch}** soma **${fmt(topUnitPO.totalPO)}** em compras (**${pctPO}%** do valor corporativo de OCs).\n\n`;
       resp += `---\n\n`;
 
       resp += `#### 📊 1. Ranking Geral de Gastos por Unidade (Consolidado)\n\n`;
@@ -375,22 +400,20 @@ export const AssistenteIA: React.FC = () => {
         resp += `| **${medalhas[idx] || `${idx + 1}º Lugar`}** | **Unidade ${b.branch}** | ${fmt(b.spentCC)} | ${fmt(b.totalPO)} (${b.poCount} OCs) | **${fmt(b.totalGasto)}** | **${pct}%** | ${mainCCDesc} |\n`;
       });
 
-      resp += `| **TOTAL GERAL** | **Todas as 4 Filiais** | **${fmt(grandTotalCC)}** | **${fmt(grandTotalPO)}** | **${fmt(grandTotalConsolidated)}** | **100,0%** | Orçamento Total: ${fmt(grandBudget)} |\n\n`;
+      resp += `| **TOTAL GERAL** | **Todas as Filiais** | **${fmt(grandTotalCC)}** | **${fmt(grandTotalPO)}** | **${fmt(grandTotalConsolidated)}** | **100,0%** | Orçamento Total: ${fmt(grandBudget)} |\n\n`;
       resp += `---\n\n`;
 
-      resp += `#### 🔍 2. Raio-X da Unidade Líder em Gastos: Unidade SP (${fmt(topUnitTotal.totalGasto)})\n`;
+      resp += `#### 🔍 2. Detalhamento da Unidade Líder: Unidade ${topUnitTotal.branch} (${fmt(topUnitTotal.totalGasto)})\n`;
       resp += `- **Consumo nos Centros de Custo:**\n`;
-      topUnitTotal.ccs.forEach(c => {
-        resp += `  - **${c.code} - ${c.name}:** Gasto de **${fmt(c.spent)}** (de ${fmt(c.budget)} alocados | Saldo: ${fmt(c.budget - c.spent)})\n`;
-      });
-      resp += `- **Ordens de Compra Emitidas:** 2 OCs ativas/entregues somando **${fmt(topUnitTotal.totalPO)}** (\`OC-2025-095\` TI R$ 7.500,00 e \`OC-2025-092\` Logística R$ 3.700,00).\n\n`;
-
-      resp += `#### ⚠️ 3. Alerta de Gestão: Unidade RJ (Pico em Ordens de Compra)\n`;
-      resp += `A Unidade RJ é a segunda em gastos consolidados (${fmt(branchStats.find(b => b.branch === 'RJ')?.totalGasto || 0)}), porém é a **campeã de aquisições de novos materiais (${fmt(topUnitPO.totalPO)})**:\n`;
-      resp += `- **OC-2025-088:** R$ 14.850,00 (EletroTubos) — **Estouro de Teto de + R$ 4.850,00** aguardando parecer da Diretoria.\n`;
-      resp += `- **OC-2025-098:** R$ 4.500,00 (Proteção & Cia) — Luvas de vaqueta para reposição urgente.\n\n`;
-
-      resp += `💡 **Diretriz Estratégica:** A Unidade SP possui a maior escala operacional e sede administrativa da empresa, justificando o volume de TI e logística. Já na Unidade RJ, a recomendação é estancar compras emergenciais utilizando remessas de transferência a partir do estoque excedente de SP.`;
+      if (topUnitTotal.ccs.length > 0) {
+        topUnitTotal.ccs.forEach(c => {
+          resp += `  - **${c.code} - ${c.name}:** Gasto de **${fmt(c.spent)}** (de ${fmt(c.budget)} alocados | Saldo: ${fmt(c.budget - c.spent)})\n`;
+        });
+      } else {
+        resp += `  - Nenhum centro de custo alocado nesta unidade.\n`;
+      }
+      const topPOs = state.purchaseOrders.filter(po => po.branch === topUnitTotal.branch && po.status !== 'CANCELADO');
+      resp += `- **Ordens de Compra Emitidas:** ${topPOs.length > 0 ? `${topPOs.length} OCs ativas somando ${fmt(topUnitTotal.totalPO)} (${topPOs.map(o => `\`${o.code}\` ${fmt(o.totalValue)}`).join(', ')}).` : 'Nenhuma ordem de compra cadastrada nesta unidade.'}\n\n`;
 
       return resp;
     }

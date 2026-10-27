@@ -667,7 +667,32 @@ export const Administracao: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
+              {currentUser?.role === 'Master' && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  startIcon={<Trash2 className="w-4 h-4 text-rose-600" />}
+                  onClick={() => {
+                    if (window.confirm('Deseja remover todos os usuários de teste/demonstração? Apenas o Master Titular (zynecta@gmail.com) e contas reais serão mantidos.')) {
+                      try {
+                        const res = dataService.purgeDemoUsers(currentUser);
+                        refreshData();
+                        setRefreshTick(t => t + 1);
+                        setToastSeverity('success');
+                        setToastMessage(`${res.removedCount} usuário(s) de teste removido(s) com sucesso. Ambiente higienizado.`);
+                      } catch (e: any) {
+                        setToastSeverity('error');
+                        setToastMessage(e.message || 'Erro ao remover usuários de teste.');
+                      }
+                    }
+                  }}
+                  className="font-bold text-xs rounded-xl border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 hover:bg-rose-50"
+                >
+                  Expurgar Usuários de Teste
+                </Button>
+              )}
               <FormControl size="small" className="min-w-[220px]">
                 <InputLabel>Filtrar por Unidade</InputLabel>
                 <Select

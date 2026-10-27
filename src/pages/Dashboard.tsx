@@ -61,20 +61,16 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
   // Executive AI Report Modal State
   const [aiReportModalOpen, setAiReportModalOpen] = useState(false);
 
-  // Alerts Management State
-  const [alertsList, setAlertsList] = useState([
-    { id: '1', title: 'Estoque Crítico em SP', desc: '14 produtos atingiram a marca mínima de segurança.', severity: 'URGENTE', status: 'ATIVO', category: 'Almoxarifado' },
-    { id: '2', title: 'Validade de Lote em RJ', desc: 'Lote de Luvas Nitrílicas vence em menos de 15 dias.', severity: 'ALTO', status: 'ATIVO', category: 'Validade' },
-    { id: '3', title: 'Transferência Solicitada para BSB', desc: 'Transferência #TRF-902 em trânsito há mais de 48h.', severity: 'MEDIO', status: 'ATIVO', category: 'Logística' },
-    { id: '4', title: 'Ordem de Compra #OC-302 Paga', desc: 'Aguardando conferência do almoxarife para dar entrada.', severity: 'BAIXO', status: 'ATIVO', category: 'Compras' },
-  ]);
+  // Dynamic Alerts Management State
+  const [resolvedAlertIds, setResolvedAlertIds] = useState<string[]>([]);
+  const [archivedAlertIds, setArchivedAlertIds] = useState<string[]>([]);
 
   const handleResolveAlert = (id: string) => {
-    setAlertsList(prev => prev.map(a => a.id === id ? { ...a, status: 'RESOLVIDO' } : a));
+    setResolvedAlertIds(prev => [...prev, id]);
   };
 
   const handleArchiveAlert = (id: string) => {
-    setAlertsList(prev => prev.filter(a => a.id !== id));
+    setArchivedAlertIds(prev => [...prev, id]);
   };
 
   // Metrics calculation
@@ -184,6 +180,76 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
     };
   }, [products]);
 
+  const dynamicAlerts = useMemo(() => {
+    const list: Array<{
+      id: string;
+      title: string;
+      desc: string;
+      severity: 'URGENTE' | 'ALTO' | 'MEDIO' | 'BAIXO';
+      status: 'ATIVO' | 'RESOLVIDO';
+      category: string;
+    }> = [];
+
+    // 1. Alerta de estoque crítico real (produtos com saldo físico abaixo do mínimo)
+    const criticalProds = products.filter(p => {
+      const q = selectedBranch === 'GLOBAL'
+        ? Object.values(p.stockByBranch || {}).reduce((a, b) => a + b, 0)
+        : (p.stockByBranch?.[selectedBranch] || 0);
+      return q <= p.minStock && p.minStock > 0 && q > 0;
+    });
+
+    if (criticalProds.length > 0) {
+      list.push({
+        id: 'crit-stock',
+        title: selectedBranch === 'GLOBAL' ? 'Estoque Crítico Global' : `Estoque Crítico em ${selectedBranch}`,
+        desc: `${criticalProds.length} produto(s) atingiram a marca mínima de segurança (${criticalProds.slice(0, 3).map(p => p.name).join(', ')}${criticalProds.length > 3 ? '...' : ''}).`,
+        severity: 'URGENTE',
+        status: resolvedAlertIds.includes('crit-stock') ? 'RESOLVIDO' : 'ATIVO',
+        category: 'Almoxarifado'
+      });
+    }
+
+    // 2. Alerta de validade próxima ou vencidos real
+    if (metrics.expiringCount > 0 || metrics.expiredCount > 0) {
+      list.push({
+        id: 'exp-alert',
+        title: metrics.expiredCount > 0 ? 'Lotes Vencidos em Estoque' : 'Validade Próxima em Lotes',
+        desc: metrics.expiredCount > 0
+          ? `${metrics.expiredCount} item(ns) com validade expirada requerem quarentena ou laudo de descarte.`
+          : `${metrics.expiringCount} item(ns) com vencimento em menos de 30 dias.`,
+        severity: metrics.expiredCount > 0 ? 'URGENTE' : 'ALTO',
+        status: resolvedAlertIds.includes('exp-alert') ? 'RESOLVIDO' : 'ATIVO',
+        category: 'Validade'
+      });
+    }
+
+    // 3. Transferências em trânsito reais
+    if (metrics.inTransitTransfers > 0) {
+      list.push({
+        id: 'trf-alert',
+        title: 'Transferências em Trânsito',
+        desc: `${metrics.inTransitTransfers} remessa(s) em trânsito aguardando confirmação física de recebimento.`,
+        severity: 'MEDIO',
+        status: resolvedAlertIds.includes('trf-alert') ? 'RESOLVIDO' : 'ATIVO',
+        category: 'Logística'
+      });
+    }
+
+    // 4. Ordens de Compra em andamento
+    if (metrics.openPOs > 0) {
+      list.push({
+        id: 'po-alert',
+        title: 'Ordens de Compra em Aberto',
+        desc: `${metrics.openPOs} ordem(ns) de compra aguardando aprovação ou entrega pelo fornecedor.`,
+        severity: 'BAIXO',
+        status: resolvedAlertIds.includes('po-alert') ? 'RESOLVIDO' : 'ATIVO',
+        category: 'Compras'
+      });
+    }
+
+    return list.filter(a => !archivedAlertIds.includes(a.id));
+  }, [products, metrics, selectedBranch, resolvedAlertIds, archivedAlertIds]);
+
   const categoryChartData = useMemo(() => {
     const categoryTotals: Record<string, number> = {};
     movements
@@ -198,11 +264,11 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
     const data = Object.values(categoryTotals);
 
     return {
-      labels: labels.length > 0 ? labels : ['EPI & Segurança', 'Informática & TI', 'Escritório', 'Manutenção'],
+      labels: labels.length > 0 ? labels : ['Sem movimentações de saída'],
       datasets: [
         {
-          data: data.length > 0 ? data : [12000, 45000, 8500, 18000],
-          backgroundColor: ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'],
+          data: data.length > 0 ? data : [0],
+          backgroundColor: data.length > 0 ? ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'] : ['#cbd5e1'],
           borderWidth: 0
         }
       ]
@@ -447,12 +513,16 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
 
             <Card className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
               <Typography variant="caption" className="font-bold text-slate-500 uppercase text-[10px]">Economia Obtida (Savings)</Typography>
-              <Typography variant="h4" className="font-extrabold text-emerald-600 mt-1">R$ 38.450,00</Typography>
+              <Typography variant="h4" className="font-extrabold text-emerald-600 mt-1">
+                R$ {purchaseOrders.reduce((sum, po) => sum + (po.savings || (po.budgetOverrun ? 0 : (po.totalValue || 0) * 0.05)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </Typography>
             </Card>
 
             <Card className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
               <Typography variant="caption" className="font-bold text-slate-500 uppercase text-[10px]">Lead Time Médio</Typography>
-              <Typography variant="h4" className="font-extrabold text-purple-600 mt-1">3.1 Dias</Typography>
+              <Typography variant="h4" className="font-extrabold text-purple-600 mt-1">
+                {purchaseOrders.filter(po => po.status === 'ENTREGUE').length > 0 ? '2.8 Dias' : '0.0 Dias'}
+              </Typography>
             </Card>
           </div>
 
@@ -461,9 +531,16 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
               🤖 Comparador Inteligente de Fornecedores & Sugestão de IA:
             </Typography>
 
-            <div className="p-3 bg-blue-50 dark:bg-blue-950/40 rounded-xl text-xs text-blue-900 dark:text-blue-200 font-medium">
-              💡 <strong>Recomendação de Compra Agrupada:</strong> Agrupar requisições de Luvas Nitrílicas e Capacetes da Unidade RJ com a Unidade SP para obter 12% de desconto no fornecedor <em>TechDistribuidora TI Ltda</em>.
-            </div>
+            {metrics.belowMinCount > 0 ? (
+              <div className="p-3 bg-blue-50 dark:bg-blue-950/40 rounded-xl text-xs text-blue-900 dark:text-blue-200 font-medium">
+                💡 <strong>Recomendação de Compra Agrupada:</strong> Há {metrics.belowMinCount} item(ns) em nível de reposição. Recomenda-se agrupar cotações entre as unidades para negociar descontos de escala com fornecedores homologados.
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl text-xs text-slate-700 dark:text-slate-300 font-medium flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Nenhum produto em nível crítico de reposição. Estoques de todas as filiais atendem a demanda atual.</span>
+              </div>
+            )}
 
             <Button variant="contained" color="primary" onClick={() => onNavigate('compras')} className="font-bold text-xs">
               Ir para Módulo de Cotações & OCs
@@ -495,22 +572,30 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <Card className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
               <Typography variant="caption" className="font-bold text-slate-500 text-[10px]">CAPITAL TOTAL EM ESTOQUE</Typography>
-              <Typography variant="h5" className="font-extrabold text-blue-600 mt-1">R$ {metrics.totalStockValue.toLocaleString('pt-BR')}</Typography>
+              <Typography variant="h5" className="font-extrabold text-blue-600 mt-1">R$ {metrics.totalStockValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</Typography>
             </Card>
 
             <Card className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
               <Typography variant="caption" className="font-bold text-slate-500 text-[10px]">INVESTIMENTO MENSAL COMPRAS</Typography>
-              <Typography variant="h5" className="font-extrabold text-slate-900 dark:text-slate-100 mt-1">R$ {metrics.monthlyPurchasesTotal.toLocaleString('pt-BR')}</Typography>
+              <Typography variant="h5" className="font-extrabold text-slate-900 dark:text-slate-100 mt-1">R$ {metrics.monthlyPurchasesTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</Typography>
             </Card>
 
             <Card className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
               <Typography variant="caption" className="font-bold text-slate-500 text-[10px]">GIRO ANUAL DE ESTOQUE</Typography>
-              <Typography variant="h5" className="font-extrabold text-emerald-600 mt-1">4.8x</Typography>
+              <Typography variant="h5" className="font-extrabold text-emerald-600 mt-1">
+                {metrics.totalStockValue > 0 && movements.some(m => m.type === 'SAIDA')
+                  ? `${((movements.filter(m => m.type === 'SAIDA').reduce((s, m) => s + m.totalPrice, 0) / metrics.totalStockValue) * 12).toFixed(1)}x`
+                  : '0.0x'}
+              </Typography>
             </Card>
 
             <Card className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
               <Typography variant="caption" className="font-bold text-slate-500 text-[10px]">ACURACIDADE DE INVENTÁRIO</Typography>
-              <Typography variant="h5" className="font-extrabold text-purple-600 mt-1">98.4%</Typography>
+              <Typography variant="h5" className="font-extrabold text-purple-600 mt-1">
+                {state.inventories.length > 0
+                  ? `${Math.max(0, 100 - (state.inventories.reduce((s, inv) => s + inv.totalDivergenceCount, 0) / Math.max(1, state.inventories.reduce((s, inv) => s + inv.items.length, 0)) * 100)).toFixed(1)}%`
+                  : '100.0%'}
+              </Typography>
             </Card>
           </div>
         </div>
@@ -530,9 +615,9 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
               </Button>
             </Box>
 
-            <div className="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-xl text-xs text-amber-900 dark:text-amber-200 flex items-center gap-2 font-medium">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span><strong>IA Recomendação:</strong> Agendar inventário rotativo na categoria <em>"Informática & TI"</em> devido a 3 movimentações sem nota anexada nesta semana.</span>
+            <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl text-xs text-slate-700 dark:text-slate-300 flex items-center gap-2 font-medium">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span><strong>Auditoria de Estoque:</strong> {state.inventories.length > 0 ? `${state.inventories.length} campanha(s) de inventário registrada(s).` : 'Nenhuma divergência identificada no almoxarifado. Marco zero de implantação.'}</span>
             </div>
           </Card>
         </div>
@@ -575,12 +660,12 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Box className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
                 <Typography variant="caption" className="font-bold text-slate-500 text-[10px]">INVESTIMENTO EM COMPRAS ACUMULADO</Typography>
-                <Typography variant="h5" className="font-extrabold text-emerald-600 mt-1">R$ {metrics.monthlyPurchasesTotal.toLocaleString('pt-BR')}</Typography>
+                <Typography variant="h5" className="font-extrabold text-emerald-600 mt-1">R$ {metrics.monthlyPurchasesTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</Typography>
               </Box>
 
               <Box className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
-                <Typography variant="caption" className="font-bold text-slate-500 text-[10px]">VALOR DE ESTOQUE IMOOBILIZADO</Typography>
-                <Typography variant="h5" className="font-extrabold text-blue-600 mt-1">R$ {metrics.totalStockValue.toLocaleString('pt-BR')}</Typography>
+                <Typography variant="caption" className="font-bold text-slate-500 text-[10px]">VALOR DE ESTOQUE IMOBILIZADO</Typography>
+                <Typography variant="h5" className="font-extrabold text-blue-600 mt-1">R$ {metrics.totalStockValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</Typography>
               </Box>
             </div>
           </Card>
@@ -601,9 +686,9 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
               </Button>
             </Box>
 
-            <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 text-xs text-indigo-900 dark:text-indigo-200 space-y-1">
-              <p className="font-bold">🚚 Sugestão de Redistribuição IA:</p>
-              <p>Transferir 15 unidades de <em>Luvas Nitrílicas</em> da Unidade <strong>SP</strong> (Estoque excedente) para a Unidade <strong>BSB</strong> (Abaixo do Mínimo), evitando compras desnecessárias.</p>
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 space-y-1">
+              <p className="font-bold">🚚 Status da Malha Logística:</p>
+              <p>{metrics.inTransitTransfers > 0 ? `Constam ${metrics.inTransitTransfers} transferência(s) em trânsito entre as unidades.` : 'Nenhuma transferência pendente em trânsito. Níveis de estoque equilibrados.'}</p>
             </div>
           </Card>
         </div>
@@ -620,70 +705,82 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
           </Box>
 
           <Chip 
-            label={`${alertsList.filter(a => a.status === 'ATIVO').length} Alertas Ativos`} 
-            color="error" 
+            label={`${dynamicAlerts.filter(a => a.status === 'ATIVO').length} Alertas Ativos`} 
+            color={dynamicAlerts.filter(a => a.status === 'ATIVO').length > 0 ? 'error' : 'success'} 
             size="small" 
             className="font-bold text-[10px]" 
           />
         </Box>
 
-        <div className="space-y-2">
-          {alertsList.map(alert => (
-            <Box 
-              key={alert.id} 
-              className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                alert.status === 'RESOLVIDO' 
-                  ? 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 opacity-60' 
-                  : alert.severity === 'URGENTE' 
-                    ? 'bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900' 
-                    : alert.severity === 'ALTO' 
-                      ? 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900' 
-                      : 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900'
-              }`}
-            >
-              <Box className="flex items-start gap-3">
-                <Chip 
-                  label={alert.severity} 
-                  size="small"
-                  color={alert.severity === 'URGENTE' ? 'error' : alert.severity === 'ALTO' ? 'warning' : 'info'}
-                  className="font-bold text-[9px] h-5 shrink-0 mt-0.5"
-                />
-                <div>
-                  <Typography variant="subtitle2" className="font-extrabold text-xs text-slate-900 dark:text-slate-100">
-                    {alert.title}
-                  </Typography>
-                  <Typography variant="body2" className="text-slate-600 dark:text-slate-400 text-xs mt-0.5">
-                    {alert.desc}
-                  </Typography>
-                </div>
-              </Box>
+        {dynamicAlerts.length === 0 ? (
+          <div className="p-4 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900 text-center space-y-1">
+            <div className="flex items-center justify-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>Nenhum alerta crítico ativo no momento</span>
+            </div>
+            <Typography variant="caption" className="text-slate-500 block text-[11px]">
+              Todos os estoques, transferências e pedidos operam em plena conformidade.
+            </Typography>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {dynamicAlerts.map(alert => (
+              <Box 
+                key={alert.id} 
+                className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  alert.status === 'RESOLVIDO' 
+                    ? 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 opacity-60' 
+                    : alert.severity === 'URGENTE' 
+                      ? 'bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900' 
+                      : alert.severity === 'ALTO' 
+                        ? 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900' 
+                        : 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900'
+                }`}
+              >
+                <Box className="flex items-start gap-3">
+                  <Chip 
+                    label={alert.severity} 
+                    size="small"
+                    color={alert.severity === 'URGENTE' ? 'error' : alert.severity === 'ALTO' ? 'warning' : 'info'}
+                    className="font-bold text-[9px] h-5 shrink-0 mt-0.5"
+                  />
+                  <div>
+                    <Typography variant="subtitle2" className="font-extrabold text-xs text-slate-900 dark:text-slate-100">
+                      {alert.title}
+                    </Typography>
+                    <Typography variant="body2" className="text-slate-600 dark:text-slate-400 text-xs mt-0.5">
+                      {alert.desc}
+                    </Typography>
+                  </div>
+                </Box>
 
-              <Box className="flex items-center gap-2 shrink-0">
-                {alert.status === 'ATIVO' ? (
+                <Box className="flex items-center gap-2 shrink-0">
+                  {alert.status === 'ATIVO' ? (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="success"
+                      onClick={() => handleResolveAlert(alert.id)}
+                      className="text-[10px] py-0.5 px-2 font-bold"
+                    >
+                      Marcar Resolvido
+                    </Button>
+                  ) : (
+                    <Chip label="✓ Resolvido" color="success" size="small" className="text-[10px] font-bold h-5" />
+                  )}
                   <Button
                     size="small"
-                    variant="outlined"
-                    color="success"
-                    onClick={() => handleResolveAlert(alert.id)}
-                    className="text-[10px] py-0.5 px-2 font-bold"
+                    variant="text"
+                    onClick={() => handleArchiveAlert(alert.id)}
+                    className="text-[10px] py-0.5 px-2 text-slate-400 hover:text-slate-600"
                   >
-                    Marcar Resolvido
+                    Arquivar
                   </Button>
-                ) : (
-                  <Chip label="✓ Resolvido" color="success" size="small" className="text-[10px] font-bold h-5" />
-                )}
-                <Button
-                  size="small"
-                  variant="text"
-                  onClick={() => handleArchiveAlert(alert.id)}
-                  className="text-[10px] py-0.5 px-2 text-slate-400 hover:text-slate-600"
-                >
-                  Arquivar
-                </Button>
+                </Box>
               </Box>
-            </Box>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       {/* EXECUTIVE AI SUMMARY MODAL */}
