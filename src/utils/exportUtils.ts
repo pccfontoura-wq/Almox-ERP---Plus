@@ -25,6 +25,7 @@ export function exportToExcel(data: Record<string, any>[], filename: string = 'e
 }
 
 import { BranchInfo, PurchaseOrder, PurchaseRequest, Requisition, CostCenter } from '../types';
+import { dataService } from '../services/dataService';
 
 /**
  * Generates an executive PDF document with Almox Plus header and professional table layout,
@@ -269,6 +270,7 @@ export function exportInventoryCountSheetPDF(
     code: string;
     branch: string;
     title: string;
+    category?: string;
     startedAt: string;
     auditorUser?: string;
     createdBy?: string;
@@ -335,29 +337,36 @@ export function exportInventoryCountSheetPDF(
   doc.text(audit.code, leftMargin + 30, 38);
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`Unidade / Almoxarifado:`, leftMargin + 65, 38);
+  doc.text(`Unidade:`, leftMargin + 65, 38);
   doc.setFont('helvetica', 'normal');
-  doc.text(audit.branch, leftMargin + 98, 38);
+  doc.text(audit.branch, leftMargin + 80, 38);
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`Campanha:`, leftMargin + 120, 38);
+  doc.text(`Campanha:`, leftMargin + 98, 38);
   doc.setFont('helvetica', 'normal');
-  doc.text(audit.title || 'Inventário Periódico Geral', leftMargin + 140, 38);
+  doc.text(audit.title || 'Inventário Periódico Geral', leftMargin + 117, 38);
 
   doc.setFont('helvetica', 'bold');
+  doc.text(`Categoria:`, leftMargin + 195, 38);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(37, 99, 235);
+  doc.text(audit.category || 'Todas as Categorias', leftMargin + 212, 38);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
   doc.text(`Responsável Abertura:`, leftMargin + 3, 44);
   doc.setFont('helvetica', 'normal');
   doc.text(audit.createdBy || audit.auditorUser || 'Administrador', leftMargin + 35, 44);
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`Inventariante de Campo:`, leftMargin + 65, 44);
+  doc.text(`Inventariante de Campo:`, leftMargin + 85, 44);
   doc.setFont('helvetica', 'normal');
-  doc.text('_____________________________', leftMargin + 102, 44);
+  doc.text('_____________________________', leftMargin + 122, 44);
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`Data da Contagem:`, leftMargin + 160, 44);
+  doc.text(`Data da Contagem:`, leftMargin + 185, 44);
   doc.setFont('helvetica', 'normal');
-  doc.text('____ / ____ / ________', leftMargin + 190, 44);
+  doc.text('____ / ____ / ________', leftMargin + 215, 44);
 
   // Table Columns Definition
   // 1: Item (12mm), 2: SKU (28mm), 3: Descrição (75mm), 4: UN (12mm), 5: Localização (28mm), 6: 1ª Contagem (32mm), 7: 2ª Contagem (32mm), 8: Visto/Obs (tableWidth - remainder)
@@ -1361,5 +1370,349 @@ export function exportRequisitionPDF(
   }
 
   doc.save(`requisicao-material-${requisition.code.toLowerCase()}_${requisition.branch}.pdf`);
+}
+
+/**
+ * Generates an executive Inventory Audit & Reconciliation Report (Laudo de Reconciliação de Inventário)
+ * for finalized campaigns with Unit headers, divergence analysis, financial balance, and signatures.
+ */
+export function exportInventoryReconciliationPDF(
+  audit: {
+    code: string;
+    branch: string;
+    title: string;
+    category?: string;
+    status: string;
+    startedAt: string;
+    finishedAt?: string;
+    reconciledAt?: string;
+    reconciledBy?: string;
+    createdBy?: string;
+    auditorUser?: string;
+    totalDivergenceCount: number;
+    totalDivergenceValue: number;
+    items: Array<{
+      productId: string;
+      productCode: string;
+      productName: string;
+      unit?: string;
+      systemQuantity: number;
+      countedQuantity: number;
+      divergence: number;
+      divergenceValue?: number;
+      notes?: string;
+    }>;
+  },
+  productsList?: Array<{ id: string; locationSlot?: string; unit?: string; category?: string; unitPrice?: number }>
+) {
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const leftMargin = 12;
+  const rightMargin = 12;
+  const contentWidth = pageWidth - leftMargin - rightMargin;
+
+  // Branch Info
+  const branchInfo = dataService.getBranches(false).find(b => b.code === audit.branch);
+  const corpName = branchInfo?.corporateName || 'Almox Plus Tecnologia e Logística S.A.';
+  const unitName = branchInfo?.name || `Unidade ${audit.branch}`;
+  const cnpj = branchInfo?.cnpj || '12.345.678/0001-90';
+  const ie = branchInfo?.stateRegistration || 'Isento';
+  const addr = branchInfo?.address || `${branchInfo?.street || ''}, ${branchInfo?.number || ''} - ${branchInfo?.city || ''}/${branchInfo?.state || ''}`;
+
+  // Header Banner
+  doc.setFillColor(15, 23, 42); // Slate 900
+  doc.rect(0, 0, pageWidth, 24, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(248, 250, 252);
+  doc.text(`${corpName} • ${unitName} (${audit.branch})`, leftMargin, 9);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(203, 213, 225);
+  doc.text(`CNPJ: ${cnpj} | IE: ${ie} | Almoxarifado Central`, leftMargin, 15);
+  doc.text(`Endereço: ${addr}`, leftMargin, 20);
+
+  doc.setFontSize(8);
+  doc.text(`Emissão do Laudo: ${new Date().toLocaleString('pt-BR')}`, pageWidth - rightMargin, 12, { align: 'right' });
+  doc.setFont('helvetica', 'bold');
+  doc.text(`STATUS: ${audit.status === 'CONCLUIDO' ? 'RECONCILIADO & CONCLUÍDO' : 'EM ANDAMENTO'}`, pageWidth - rightMargin, 18, { align: 'right' });
+
+  // Document Title & Bar
+  let curY = 28;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(leftMargin, curY, contentWidth, 12, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(15, 23, 42);
+  doc.text('LAUDO TÉCNICO DE AUDITORIA & RECONCILIAÇÃO FÍSICA DE ESTOQUE', leftMargin + 4, curY + 7.5);
+
+  doc.setFontSize(11);
+  doc.setTextColor(37, 99, 235);
+  doc.text(audit.code, pageWidth - rightMargin - 4, curY + 7.5, { align: 'right' });
+
+  curY += 15;
+
+  // Metadata Block
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(leftMargin, curY, contentWidth, 16, 'FD');
+
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(71, 85, 105);
+  doc.text('DADOS DA CAMPANHA:', leftMargin + 3, curY + 4.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Título: ${audit.title || 'Inventário Periódico'}`, leftMargin + 3, curY + 9);
+  doc.text(`Categoria Auditada: ${audit.category || 'Todas as Categorias (Geral)'}`, leftMargin + 3, curY + 13.5);
+
+  const col2X = leftMargin + 95;
+  doc.text(`Data de Abertura: ${new Date(audit.startedAt).toLocaleDateString('pt-BR')}`, col2X, curY + 9);
+  doc.text(`Responsável Abertura: ${audit.createdBy || audit.auditorUser || 'Administrador'}`, col2X, curY + 13.5);
+
+  const col3X = leftMargin + 185;
+  const finDate = audit.reconciledAt || audit.finishedAt;
+  doc.text(`Data de Conclusão: ${finDate ? new Date(finDate).toLocaleDateString('pt-BR') : 'Em Andamento'}`, col3X, curY + 9);
+  doc.text(`Reconciliado Por: ${audit.reconciledBy || 'Pendente de Reconciliação'}`, col3X, curY + 13.5);
+
+  curY += 19;
+
+  // Summary Metrics KPIs
+  const totalItems = audit.items.length;
+  const exactItems = audit.items.filter(i => i.divergence === 0).length;
+  const divergentItems = audit.items.filter(i => i.divergence !== 0).length;
+  const surplusCount = audit.items.filter(i => i.divergence > 0).length;
+  const lackCount = audit.items.filter(i => i.divergence < 0).length;
+  const accuracyPct = totalItems > 0 ? ((exactItems / totalItems) * 100).toFixed(1) : '100.0';
+
+  const kpiBoxWidth = (contentWidth - 12) / 4;
+  const kpiBoxHeight = 13;
+
+  const renderKPIBox = (x: number, title: string, value: string, sub: string, bgColor: number[], textColor: number[]) => {
+    doc.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(x, curY, kpiBoxWidth, kpiBoxHeight, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(title.toUpperCase(), x + 3, curY + 3.8);
+
+    doc.setFontSize(10.5);
+    doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+    doc.text(value, x + 3, curY + 8.2);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    doc.setTextColor(148, 163, 184);
+    doc.text(sub, x + 3, curY + 11.5);
+  };
+
+  renderKPIBox(leftMargin, 'Itens Auditados', `${totalItems} produtos`, `${audit.category || 'Todas as categorias'}`, [255, 255, 255], [30, 41, 59]);
+  renderKPIBox(leftMargin + kpiBoxWidth + 4, 'Acuracidade Física', `${accuracyPct}%`, `${exactItems} itens com saldo exato`, [240, 253, 244], [22, 101, 52]);
+  renderKPIBox(leftMargin + (kpiBoxWidth * 2) + 8, 'Divergências', `${divergentItems} itens`, `+${surplusCount} sobras / -${lackCount} faltas`, [254, 242, 242], [153, 27, 27]);
+  renderKPIBox(leftMargin + (kpiBoxWidth * 3) + 12, 'Impacto Financeiro', `R$ ${audit.totalDivergenceValue.toFixed(2)}`, `Ajuste contábil total`, [239, 246, 255], [29, 78, 216]);
+
+  curY += 16;
+
+  // Table Columns Definition
+  const recCol = {
+    idx: 10,
+    code: 26,
+    desc: 78,
+    cat: 35,
+    un: 12,
+    sys: 22,
+    cnt: 22,
+    div: 22,
+    price: 22,
+    totalDiv: 24
+  };
+
+  const renderTableHeader = (y: number) => {
+    doc.setFillColor(15, 23, 42);
+    doc.rect(leftMargin, y, contentWidth, 6.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(255, 255, 255);
+
+    let x = leftMargin;
+    doc.text('#', x + 2, y + 4.5); x += recCol.idx;
+    doc.text('SKU / Código', x + 2, y + 4.5); x += recCol.code;
+    doc.text('Descrição do Produto', x + 2, y + 4.5); x += recCol.desc;
+    doc.text('Categoria', x + 2, y + 4.5); x += recCol.cat;
+    doc.text('UN', x + 2, y + 4.5, { align: 'center' }); x += recCol.un;
+    doc.text('Qtd Sistema', x + recCol.sys - 2, y + 4.5, { align: 'right' }); x += recCol.sys;
+    doc.text('Qtd Contada', x + recCol.cnt - 2, y + 4.5, { align: 'right' }); x += recCol.cnt;
+    doc.text('Divergência', x + recCol.div - 2, y + 4.5, { align: 'right' }); x += recCol.div;
+    doc.text('Vl. Unit. (R$)', x + recCol.price - 2, y + 4.5, { align: 'right' }); x += recCol.price;
+    doc.text('Diverg. (R$)', x + recCol.totalDiv - 2, y + 4.5, { align: 'right' });
+  };
+
+  renderTableHeader(curY);
+  curY += 6.5;
+
+  const rowH = 6;
+  const prodMap = new Map<string, any>();
+  if (productsList) {
+    productsList.forEach(p => prodMap.set(p.id, p));
+  }
+
+  audit.items.forEach((item, index) => {
+    if (curY + rowH > pageHeight - 35) {
+      doc.addPage();
+      curY = 16;
+      renderTableHeader(curY);
+      curY += 6.5;
+    }
+
+    const prod = prodMap.get(item.productId);
+    const cat = prod?.category || 'Geral';
+    const uPrice = prod?.unitPrice ?? (item.divergence !== 0 && item.divergenceValue ? Math.abs(item.divergenceValue / item.divergence) : 0);
+    const divVal = item.divergenceValue ?? (item.divergence * uPrice);
+
+    if (item.divergence !== 0) {
+      doc.setFillColor(item.divergence > 0 ? 240 : 254, item.divergence > 0 ? 253 : 242, item.divergence > 0 ? 244 : 242);
+    } else if (index % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+    } else {
+      doc.setFillColor(255, 255, 255);
+    }
+    doc.rect(leftMargin, curY, contentWidth, rowH, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(leftMargin, curY, contentWidth, rowH, 'S');
+
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+
+    let x = leftMargin;
+    doc.text(String(index + 1), x + 2, curY + 4.2); x += recCol.idx;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    doc.text(item.productCode, x + 2, curY + 4.2); x += recCol.code;
+
+    doc.setFont('helvetica', 'normal');
+    const truncatedName = doc.splitTextToSize(item.productName, recCol.desc - 4)[0];
+    doc.text(truncatedName, x + 2, curY + 4.2); x += recCol.desc;
+
+    const truncatedCat = doc.splitTextToSize(cat, recCol.cat - 4)[0];
+    doc.text(truncatedCat, x + 2, curY + 4.2); x += recCol.cat;
+
+    doc.text(item.unit || prod?.unit || 'UN', x + (recCol.un / 2), curY + 4.2, { align: 'center' }); x += recCol.un;
+
+    doc.text(String(item.systemQuantity), x + recCol.sys - 2, curY + 4.2, { align: 'right' }); x += recCol.sys;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(String(item.countedQuantity), x + recCol.cnt - 2, curY + 4.2, { align: 'right' }); x += recCol.cnt;
+
+    // Divergence color
+    if (item.divergence === 0) {
+      doc.setTextColor(100, 116, 139);
+      doc.text('0', x + recCol.div - 2, curY + 4.2, { align: 'right' });
+    } else if (item.divergence > 0) {
+      doc.setTextColor(22, 101, 52);
+      doc.text(`+${item.divergence}`, x + recCol.div - 2, curY + 4.2, { align: 'right' });
+    } else {
+      doc.setTextColor(185, 28, 28);
+      doc.text(String(item.divergence), x + recCol.div - 2, curY + 4.2, { align: 'right' });
+    }
+    x += recCol.div;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(`R$ ${uPrice.toFixed(2)}`, x + recCol.price - 2, curY + 4.2, { align: 'right' }); x += recCol.price;
+
+    if (divVal === 0) {
+      doc.setTextColor(100, 116, 139);
+      doc.text('R$ 0,00', x + recCol.totalDiv - 2, curY + 4.2, { align: 'right' });
+    } else if (divVal > 0) {
+      doc.setTextColor(22, 101, 52);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`+R$ ${divVal.toFixed(2)}`, x + recCol.totalDiv - 2, curY + 4.2, { align: 'right' });
+    } else {
+      doc.setTextColor(185, 28, 28);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`-R$ ${Math.abs(divVal).toFixed(2)}`, x + recCol.totalDiv - 2, curY + 4.2, { align: 'right' });
+    }
+
+    curY += rowH;
+  });
+
+  // Check if signatures fit on current page
+  if (curY + 28 > pageHeight - 15) {
+    doc.addPage();
+    curY = 25;
+  } else {
+    curY += 8;
+  }
+
+  // Formal Signatures
+  const sigW = (contentWidth - 20) / 3;
+
+  doc.setDrawColor(148, 163, 184);
+
+  // Sig 1: Auditor
+  doc.line(leftMargin, curY + 12, leftMargin + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Auditor / Inventariante', leftMargin + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(audit.auditorUser || audit.createdBy || 'Responsável pela Contagem', leftMargin + (sigW / 2), curY + 20, { align: 'center' });
+
+  // Sig 2: Almoxarife
+  const sig2X = leftMargin + sigW + 10;
+  doc.line(sig2X, curY + 12, sig2X + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Responsável pelo Almoxarifado', sig2X + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Unidade ${audit.branch} • Conferência Física`, sig2X + (sigW / 2), curY + 20, { align: 'center' });
+
+  // Sig 3: Diretoria / Reconciliação
+  const sig3X = sig2X + sigW + 10;
+  doc.line(sig3X, curY + 12, sig3X + sigW, curY + 12);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(51, 65, 85);
+  doc.text('Homologação / Reconciliação ERP', sig3X + (sigW / 2), curY + 16, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(audit.reconciledBy ? `Reconciliado por: ${audit.reconciledBy}` : 'Diretoria de Operações', sig3X + (sigW / 2), curY + 20, { align: 'center' });
+
+  // Page numbers
+  const pageCount = doc.internal.pages.length - 1;
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `Laudo de Auditoria de Inventário ${audit.code} • ${unitName} • Página ${i} de ${pageCount} — Almox Plus ERP`,
+      pageWidth / 2,
+      pageHeight - 6,
+      { align: 'center' }
+    );
+  }
+
+  doc.save(`laudo-reconciliacao-inventario-${audit.code.toLowerCase()}_${audit.branch}.pdf`);
 }
 

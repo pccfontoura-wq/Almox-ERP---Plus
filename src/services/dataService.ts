@@ -2096,7 +2096,7 @@ class DataService {
   }
 
   // --- INVENTORY AUDITS (INVENTÁRIO FÍSICO) ---
-  public createInventoryAudit(branch: Branch, title: string, productIds: string[], currentUser: User): InventoryAudit {
+  public createInventoryAudit(branch: Branch, title: string, productIds: string[], currentUser: User, category: string = 'TODAS'): InventoryAudit {
     if (currentUser.role === 'Visitante') {
       throw new Error('Perfil Visitante não pode criar inventário.');
     }
@@ -2121,6 +2121,7 @@ class DataService {
       code: `INV-${new Date().getFullYear()}-${branch}-${Math.floor(100 + Math.random() * 900)}`,
       branch,
       title,
+      category: category || 'TODAS',
       status: 'EM_ANDAMENTO',
       createdBy: currentUser.name,
       auditorUser: currentUser.name,
@@ -2131,7 +2132,7 @@ class DataService {
     };
 
     this.state.inventories.unshift(audit);
-    this.logAudit(currentUser, 'INVENTARIAR', 'Inventário', `Iniciado inventário físico ${audit.code} na unidade ${branch}.`, null, JSON.stringify(audit), branch);
+    this.logAudit(currentUser, 'INVENTARIAR', 'Inventário', `Iniciado inventário físico ${audit.code} na unidade ${branch} (Categoria: ${category}).`, null, JSON.stringify(audit), branch);
     this.saveState();
     return audit;
   }

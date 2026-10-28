@@ -257,6 +257,7 @@ export interface PurchaseOrder {
   paymentTerms?: string;
   purchaseRequestId?: string;
   purchaseRequestCode?: string;
+  savings?: number;
   budgetOverrun?: boolean;
   budgetOverrunAmount?: number;
   budgetOverrunJustification?: string;
@@ -348,6 +349,7 @@ export interface InventoryAudit {
   code: string;
   branch: Branch;
   title: string;
+  category?: string;
   status: 'EM_ANDAMENTO' | 'CONCLUIDO';
   items: InventoryAuditItem[];
   startedAt: string;
