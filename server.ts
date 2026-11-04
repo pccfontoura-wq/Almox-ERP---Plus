@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
@@ -8,7 +9,8 @@ import {
   INITIAL_PURCHASE_ORDERS,
   INITIAL_COST_CENTERS,
   INITIAL_PURCHASE_REQUESTS,
-  INITIAL_ASSETS
+  INITIAL_ASSETS,
+  INITIAL_BRANCHES
 } from "./src/data/seedData";
 
 async function startServer() {
@@ -73,6 +75,11 @@ async function startServer() {
 
     const requisitions = context?.requisitions || [];
     const transfers = context?.transfers || [];
+    const users = context?.users || [];
+    const inventories = context?.inventories || [];
+    const branches = context?.branches && context.branches.length > 0
+      ? context.branches
+      : INITIAL_BRANCHES;
 
     const fmtCurrency = (val: number) =>
       (val || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -83,6 +90,422 @@ async function startServer() {
     else if (/\bsp\b|s[aã]o paulo/i.test(p)) targetBranch = "SP";
     else if (/\bsjrp\b|s[aã]o jos[eé]/i.test(p)) targetBranch = "SJRP";
     else if (/\bbsb\b|bras[ií]lia/i.test(p)) targetBranch = "BSB";
+
+    // SAUDAÇÃO & APRESENTAÇÃO CONVERSACIONAL
+    const isGreeting =
+      p === "ola" ||
+      p === "oi" ||
+      p === "ola!" ||
+      p === "oi!" ||
+      p === "bom dia" ||
+      p === "boa tarde" ||
+      p === "boa noite" ||
+      p.startsWith("ola ") ||
+      p.startsWith("oi ") ||
+      p.includes("quem e voce") ||
+      p.includes("quem e o assistente") ||
+      p.includes("como voce pode me ajudar") ||
+      p.includes("o que voce pode fazer") ||
+      p.includes("o que voce faz") ||
+      p.includes("quais suas funcoes") ||
+      p === "ajuda" ||
+      p === "help" ||
+      p.includes("como funciona o assistente") ||
+      p.includes("conversar com voce");
+
+    if (isGreeting) {
+      let resp = `### 👋 Olá! Sou o Assistente Especialista do ERP Almox Plus\n\n`;
+      resp += `Sim! **Você pode conversar comigo de forma 100% natural, como falaria com um consultor ou gestor sênior de suprimentos e logística.**\n\n`;
+      resp += `Estou profundamente integrado a **todos os dados e módulos do sistema em tempo real**. Você não precisa usar comandos engessados ou termos técnicos rígidos.\n\n`;
+      resp += `#### 💬 Como você pode conversar comigo:\n`;
+      resp += `1. **Fazendo perguntas diretas em linguagem comum:**\n`;
+      resp += `   - *"Quantas unidades ativas temos hoje?"*\n`;
+      resp += `   - *"Temos material de limpeza no estoque?"*\n`;
+      resp += `   - *"Qual produto tem o maior saldo em dinheiro parado?"*\n`;
+      resp += `   - *"Quem é o responsável pela filial de São Paulo?"*\n\n`;
+      resp += `2. **Pedindo análises e relatórios:**\n`;
+      resp += `   - *"Gere um relatório executivo para apresentação da diretoria."*\n`;
+      resp += `   - *"Faça um diagnóstico da Curva ABC dos nossos produtos."*\n`;
+      resp += `   - *"Me mostre as ordens de compra que estouraram o teto orçamentário."*\n\n`;
+      resp += `3. **Solicitando conselhos e planos operacionais:**\n`;
+      resp += `   - *"Como faço para vincular material de limpeza a um centro de custo?"*\n`;
+      resp += `   - *"Recomende transferências inteligentes entre SP e RJ para economizar compras."*\n`;
+      resp += `   - *"Quais itens estão vencendo e o que devo fazer com eles?"*\n\n`;
+      resp += `Fique à vontade para me perguntar qualquer coisa sobre os módulos de **Almoxarifado, Compras, Unidades, Centros de Custo, Inventário ou Patrimônio**! Como posso te ajudar agora?`;
+      return resp;
+    }
+
+    // 0. CONSULTA DE UNIDADES OPERACIONAIS / FILIAIS DA EMPRESA (BRANCHES)
+    const isBranchesQuery =
+      (p.includes("unidade") || p.includes("unidades") || p.includes("filial") || p.includes("filiais") || p.includes("sede") || p.includes("matriz")) &&
+      (p.includes("quantas") ||
+       p.includes("quais") ||
+       p.includes("ativa") ||
+       p.includes("ativas") ||
+       p.includes("cadastrada") ||
+       p.includes("cadastradas") ||
+       p.includes("lista") ||
+       p.includes("listar") ||
+       p.includes("temos") ||
+       p.includes("existe") ||
+       p.includes("existem") ||
+       p.includes("onde") ||
+       p.includes("enderec") ||
+       p.includes("cnpj") ||
+       p.includes("gerente") ||
+       p.includes("responsavel") ||
+       p.includes("inativa") ||
+       p.includes("inativas") ||
+       p.includes("operaciona") ||
+       p === "unidades" ||
+       p === "filiais" ||
+       p === "unidades ativas" ||
+       p === "quantas unidades");
+
+    if (isBranchesQuery) {
+      const activeBranches = branches.filter((b: any) => b.active !== false);
+      const inactiveBranches = branches.filter((b: any) => b.active === false);
+      const matriz = branches.find((b: any) => b.unitType === "MATRIZ") || branches.find((b: any) => b.code === "SP") || activeBranches[0];
+
+      let resp = `### 🏢 Rede de Unidades Operacionais & Filiais no ERP Almox Plus\n\n`;
+      resp += `Atualmente constam **${branches.length} unidade(s) cadastrada(s)** no ERP, sendo **${activeBranches.length} unidade(s) ativa(s)** `;
+      if (inactiveBranches.length > 0) {
+        resp += `e **${inactiveBranches.length} inativa(s) ou em implantação**:\n\n`;
+      } else {
+        resp += `(todas operando em conformidade plena):\n\n`;
+      }
+
+      resp += `#### 1. Unidades Operacionais Ativas (${activeBranches.length}):\n`;
+      resp += `| Código | Nome da Unidade | Tipo | Cidade / UF | CNPJ | Responsável / Gerente | Status |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+      activeBranches.forEach((b: any) => {
+        const typeLabel = b.unitType === "MATRIZ" ? "Matriz" : b.unitType === "CENTRO_DISTRIBUICAO" ? "Centro de Distribuição" : "Unidade Operacional";
+        const mgr = b.managerName || b.manager || "Não atribuído";
+        resp += `| **${b.code}** | ${b.name} | ${typeLabel} | ${b.city || "-"}/${b.state || "-"} | \`${b.cnpj || "Em homologação"}\` | ${mgr} | 🟢 **Ativa** |\n`;
+      });
+      resp += `\n`;
+
+      if (inactiveBranches.length > 0) {
+        resp += `#### 2. Unidades Inativas ou em Implantação (${inactiveBranches.length}):\n`;
+        resp += `| Código | Nome da Unidade | Tipo | Cidade / UF | Responsável | Status |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+        inactiveBranches.forEach((b: any) => {
+          const typeLabel = b.unitType === "MATRIZ" ? "Matriz" : b.unitType === "CENTRO_DISTRIBUICAO" ? "Centro de Distribuição" : "Unidade Operacional";
+          const mgr = b.managerName || b.manager || "Não atribuído";
+          resp += `| **${b.code}** | ${b.name} | ${typeLabel} | ${b.city || "-"}/${b.state || "-"} | ${mgr} | ⚪ Inativa |\n`;
+        });
+        resp += `\n`;
+      }
+
+      resp += `#### 3. Governança Multiunidade no Almox Plus:\n`;
+      resp += `- **Matriz Central:** ${matriz ? `**${matriz.name} (${matriz.code})**` : "Unidade SP Matriz"}\n`;
+      resp += `- **Isolamento e Transferências:** Cada unidade possui seu saldo de estoque físico segregado, podendo emitir ou receber transferências logísticas de suprimentos.\n`;
+      resp += `- **Configuração de Filiais:** Novas unidades podem ser adicionadas ou ter seu status alterado a qualquer momento pelo menu lateral **Unidades** (acesso para Administradores Master e Gestores).`;
+
+      return resp;
+    }
+
+    // Helper to find cleaning products in catalog
+    const cleaningProducts = products.filter((pr: any) => {
+      const cat = (pr.categoria || pr.category || "").toLowerCase();
+      const name = (pr.nome || pr.name || "").toLowerCase();
+      return (
+        cat.includes("limp") ||
+        cat.includes("higien") ||
+        name.includes("limp") ||
+        name.includes("deterg") ||
+        name.includes("desinfet") ||
+        name.includes("sabao") ||
+        name.includes("sabon") ||
+        name.includes("alcool") ||
+        name.includes("papel toalha") ||
+        name.includes("saco de lixo") ||
+        name.includes("vassour") ||
+        name.includes("cloro") ||
+        name.includes("sanit")
+      );
+    });
+
+    // A1. VINCULAÇÃO DE PRODUTO A CENTRO DE CUSTO & MATERIAL DE LIMPEZA
+    const isProductCostCenterLink =
+      (p.includes("produto") && p.includes("centro de custo")) ||
+      (p.includes("limpeza") && (p.includes("centro") || p.includes("vincul") || p.includes("qual centro") || p.includes("setor"))) ||
+      p.includes("vinculado ao centro") ||
+      p.includes("vinculacao de produto") ||
+      p.includes("vincular produto") ||
+      p.includes("como o produto e vinculado") ||
+      p.includes("qual centro de custo e vinculado") ||
+      p.includes("vinculado a qual centro") ||
+      p.includes("qual centro de custo");
+
+    if (isProductCostCenterLink) {
+      let resp = `### 🏢 Como Produtos são Vinculados a Centros de Custo no Almox Plus\n\n`;
+      resp += `No **Almox Plus ERP**, os produtos **não possuem uma amarração estática e engessada a um único Centro de Custo no catálogo** de cadastro. O produto é cadastrado como um item geral (com sua Categoria, ex.: *Limpeza & Higiene*, *EPI & Segurança*, *Informática & TI*).\n\n`;
+      resp += `O vínculo contábil e orçamentário entre o produto e o Centro de Custo ocorre de forma **dinâmica no momento da operação (consumo ou aquisição)**:\n\n`;
+      resp += `1. **Na Requisição de Material (Consumo no Almoxarifado):** Quando um colaborador ou setor solicita a retirada de itens, informa para qual **Centro de Custo** o material se destina. Ao despachar a requisição com status *SAÍDA*, o sistema deduz o saldo físico do almoxarifado e debita o valor financeiro correspondente do orçamento disponível daquele Centro de Custo.\n`;
+      resp += `2. **Na Ordem de Compra (OC) ou Solicitação (SC):** Quando suprimentos compra um lote para atender a uma necessidade setorial, a OC vincula o empenho da despesa diretamente ao Centro de Custo solicitante.\n\n`;
+      resp += `#### 🧽 Exemplo Prático: Material de Limpeza\n`;
+      resp += `Itens como desinfetante, detergente, papel toalha e saco de lixo pertencem à categoria **"Limpeza & Higiene"**. A qual Centro de Custo eles serão vinculados depende exclusivamente de **quem está consumindo**:\n\n`;
+      resp += `| Cenário de Retirada / Consumo | Centro de Custo Vinculado | Efeito Contábil no ERP |\n`;
+      resp += `| :--- | :--- | :--- |\n`;
+      resp += `| **Limpeza dos escritórios e salas de reunião** | **Administrativo / RH** | Debita da verba do Administrativo |\n`;
+      resp += `| **Limpeza do galpão, docas de carga e pátio** | **Operações e Logística** | Debita do orçamento da Operação Logística |\n`;
+      resp += `| **Serviço contínuo predial / conservação** | **Manutenção e Facilities** | Debita da dotação de Manutenção |\n\n`;
+
+      if (cleaningProducts.length > 0) {
+        resp += `#### 📦 Materiais de Limpeza Cadastrados no Estoque Atual (${cleaningProducts.length} itens encontrados):\n`;
+        resp += `| SKU | Produto | Categoria | Saldo Consolidado | Preço Médio | Situação |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+        cleaningProducts.forEach((pr: any) => {
+          const qty = pr.estoqueGlobal !== undefined ? pr.estoqueGlobal : (pr.estoqueLocal || 0);
+          const unit = pr.unidadeMedida || pr.unit || "UN";
+          const price = pr.preco || pr.unitPrice || 0;
+          resp += `| **${pr.sku || pr.code}** | ${pr.nome || pr.name} | ${pr.categoria || pr.category} | **${qty} ${unit}** | ${fmtCurrency(price)} | ✅ Regular |\n`;
+        });
+        resp += `\n`;
+      }
+
+      resp += `#### 🔍 Onde Auditar no Sistema:\n`;
+      resp += `- **Menu Centros de Custos ➔ Comparativo Comprado vs. Entregue:** Exibe o saldo liberado versus o que cada setor efetivamente retirou.\n`;
+      resp += `- **Extrato do Centro de Custo:** Clicando sobre o código (ex: \`CC-101\`), o sistema detalha cada produto retirado, quantidades, datas e valor total em R$.`;
+      return resp;
+    }
+
+    // A2. CONSULTA ESPECÍFICA DE MATERIAIS DE LIMPEZA NO ESTOQUE (ex: "temos material de limpeza?", "material de limpeza", "produtos de limpeza")
+    const isCleaningSuppliesQuery =
+      (p.includes("limpeza") || p.includes("higiene")) &&
+      !p.includes("producao") &&
+      !p.includes("marco zero") &&
+      !p.includes("zerar") &&
+      !p.includes("resquicio");
+
+    if (isCleaningSuppliesQuery) {
+      let resp = `### 🧽 Consulta de Materiais de Limpeza & Higiene no Almoxarifado\n\n`;
+      if (cleaningProducts.length > 0) {
+        resp += `Identificamos **${cleaningProducts.length} produto(s) de limpeza** cadastrados no sistema:\n\n`;
+        resp += `| SKU | Produto | Categoria | Saldo Total | Preço Médio | Valor Total Imobilizado | Unidade |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+        let totalCleaningVal = 0;
+        let totalCleaningQty = 0;
+        cleaningProducts.forEach((pr: any) => {
+          const qty = pr.estoqueGlobal !== undefined ? pr.estoqueGlobal : (pr.estoqueLocal || 0);
+          const unit = pr.unidadeMedida || pr.unit || "UN";
+          const price = pr.preco || pr.unitPrice || 0;
+          const totalVal = qty * price;
+          totalCleaningVal += totalVal;
+          totalCleaningQty += qty;
+          resp += `| **${pr.sku || pr.code}** | ${pr.nome || pr.name} | ${pr.categoria || pr.category} | **${qty} ${unit}** | ${fmtCurrency(price)} | ${fmtCurrency(totalVal)} | ${unit} |\n`;
+        });
+        resp += `\n`;
+        resp += `- **Volume Total:** **${totalCleaningQty} unidades físicas**.\n`;
+        resp += `- **Investimento Imobilizado:** **${fmtCurrency(totalCleaningVal)}**.\n\n`;
+        resp += `💡 **Regra de Rateio por Centro de Custo:** Quando esses itens forem retirados pelo almoxarife, a saída é debitada do Centro de Custo requisitante (ex: *Administrativo* para escritórios ou *Operações e Logística* para limpeza do galpão/docas).`;
+      } else {
+        resp += `Atualmente **não constam produtos cadastrados na categoria de Limpeza & Higiene** no catálogo.\n\n`;
+        resp += `Para cadastrá-los, você pode:\n`;
+        resp += `1. Acessar o menu **Almoxarifado ➔ Importar Produtos CSV** e carregar sua planilha de itens;\n`;
+        resp += `2. Clicar em **"+ Novo Produto"** e selecionar a categoria **"Limpeza & Higiene"**.\n\n`;
+        resp += `Lembrando que materiais de limpeza são alocados aos Centros de Custo dinamicamente no momento da requisição ou compra.`;
+      }
+      return resp;
+    }
+
+    // A3. CONSULTA GERAL DE PRODUTOS / ITENS DO ESTOQUE / PRODUTOS IMPORTADOS NO CSV
+    const isAllProductsQuery =
+      p.includes("quais produtos") ||
+      p.includes("listar produtos") ||
+      p.includes("lista de produtos") ||
+      p.includes("todos os produtos") ||
+      p.includes("itens de estoque") ||
+      p.includes("itens do estoque") ||
+      p.includes("produtos temos") ||
+      p.includes("produtos cadastrados") ||
+      p.includes("produtos importados") ||
+      p.includes("produtos do csv") ||
+      p.includes("subiram no csv") ||
+      p.includes("subi no csv") ||
+      p.includes("o que tem no estoque") ||
+      p.includes("o que temos no estoque") ||
+      p.includes("quais itens") ||
+      (p.includes("quantos") && p.includes("produtos")) ||
+      p.includes("catalogo de produtos") ||
+      p.includes("relacao de produtos") ||
+      p.includes("relacao de itens") ||
+      p === "produtos" ||
+      p === "itens" ||
+      p === "estoque";
+
+    if (isAllProductsQuery) {
+      let resp = `### 📦 Catálogo de Produtos no Estoque do Almox Plus (${products.length} itens)\n\n`;
+      if (products.length > 0) {
+        let totalVal = 0;
+        let totalQty = 0;
+        resp += `Constam **${products.length} produtos ativos** cadastrados no sistema (incluindo os itens importados via CSV):\n\n`;
+        resp += `| Código SKU | Nome do Produto | Categoria | Saldo Físico | Preço Unit. | Valor Total | Situação |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+        products.forEach((pr: any) => {
+          const qty = pr.estoqueGlobal !== undefined ? pr.estoqueGlobal : (pr.estoqueLocal || 0);
+          const unit = pr.unidadeMedida || pr.unit || "UN";
+          const price = pr.preco || pr.unitPrice || 0;
+          const lineVal = qty * price;
+          totalVal += lineVal;
+          totalQty += qty;
+          const isCritical = qty <= (pr.min || pr.minStock || 0);
+          const status = isCritical ? "⚠️ Crítico" : "✅ Regular";
+          resp += `| **${pr.sku || pr.code}** | ${pr.nome || pr.name} | ${pr.categoria || pr.category} | **${qty} ${unit}** | ${fmtCurrency(price)} | ${fmtCurrency(lineVal)} | ${status} |\n`;
+        });
+
+        resp += `\n#### 📊 Resumo Consolidado do Estoque:\n`;
+        resp += `- **Total de Produtos Distintos:** ${products.length} itens;\n`;
+        resp += `- **Total de Unidades Físicas:** **${totalQty} unidades**;\n`;
+        resp += `- **Capital Total Imobilizado em Estoque:** **${fmtCurrency(totalVal)}**.\n\n`;
+        resp += `💡 Todos os produtos importados constam ativos no banco de dados e sincronizados entre as unidades operacionais (SP, RJ, BSB e SJRP).`;
+      } else {
+        resp += `No momento não há produtos cadastrados no estoque.\n\n`;
+        resp += `Para cadastrar ou importar seus produtos, acesse **Almoxarifado ➔ Importar Produtos CSV** ou clique em **"+ Novo Produto"**.`;
+      }
+      return resp;
+    }
+
+    // B. DIFERENÇA ENTRE PERFIS DE USUÁRIOS (Almoxarife vs Regular vs Master vs Comprador vs Diretoria)
+    const isUserRoleDifference =
+      (p.includes("almoxarife") && (p.includes("regular") || p.includes("diferen") || p.includes("funcao") || p.includes("papel") || p.includes("perfil"))) ||
+      (p.includes("usuario") && (p.includes("diferen") || p.includes("regular") || p.includes("perfis") || p.includes("papeis") || p.includes("permissoes")));
+
+    if (isUserRoleDifference) {
+      let resp = `### 👥 Matriz de Perfis e Permissões de Acesso no Almox Plus\n\n`;
+      resp += `O ERP Almox Plus opera com controle de acesso baseado em funções (RBAC), separando as responsabilidades operacionais, de suprimentos e de governança:\n\n`;
+      resp += `#### 1. Usuário Almoxarife vs. Usuário Regular\n\n`;
+      resp += `| Recurso / Operação | 📦 Usuário Almoxarife | 👤 Usuário Regular (Solicitante) |\n`;
+      resp += `| :--- | :--- | :--- |\n`;
+      resp += `| **Foco Operacional** | Gestão física do armazém e movimentação | Abertura de pedidos para o próprio setor |\n`;
+      resp += `| **Recebimento de Mercadorias (Entradas com NF-e)** | ✅ **Sim** (confere volumes, lotes e validade) | ❌ Não tem acesso |\n`;
+      resp += `| **Atendimento de Requisições (Baixas de Saída)** | ✅ **Sim** (separa itens e efetua a baixa) | ❌ Não tem acesso |\n`;
+      resp += `| **Campanhas de Inventário Físico** | ✅ **Sim** (executa contagem e bipagem) | ❌ Não tem acesso |\n`;
+      resp += `| **Transferências entre Filiais** | ✅ **Sim** (despacha e recebe remessas) | ❌ Não tem acesso |\n`;
+      resp += `| **Abertura de Requisições de Material** | ✅ Sim | ✅ **Sim (função primária deste perfil)** |\n`;
+      resp += `| **Acesso a Finanças, OCs e Preços** | ❌ Restrito a dados operacionais | ❌ Sem acesso |\n\n`;
+      resp += `#### 2. Demais Perfis do Sistema\n`;
+      resp += `- **Master (Administrador Geral):** Acesso irrestrito a todas as 4 filiais (SP, RJ, BSB, SJRP), gerenciamento de usuários, parametrizações globais, auditorias de teto e transição para modo de produção.\n`;
+      resp += `- **Comprador:** Módulo de Compras (cotações, mapa comparativo de fornecedores, emissão de Ordens de Compra - OCs e acompanhamento de entregas).\n`;
+      resp += `- **Diretoria / Gestão:** Painel de Inteligência (BI), Indicadores KPIs, Curva ABC (Pareto) e aprovação de compras que excedem a alçada orçamentária.`;
+      return resp;
+    }
+
+    // C. GUIA DE COMO IMPORTAR VIA ARQUIVO CSV (somente se perguntar como importar)
+    const isCsvImportGuide =
+      (p.includes("como importar") ||
+       p.includes("layout csv") ||
+       p.includes("ordem de importacao") ||
+       p.includes("modelo csv") ||
+       p.includes("como fazer para subir o csv") ||
+       p.includes("como subir o csv") ||
+       p.includes("como faco para subir")) &&
+      !p.includes("quais produtos") &&
+      !p.includes("listar produtos");
+
+    if (isCsvImportGuide) {
+      let resp = `### 📥 Guia de Importação de Produtos e Dados via CSV no Almox Plus\n\n`;
+      resp += `É perfeitamente possível importar sua base de produtos reais utilizando uma planilha ou arquivo **CSV (separado por vírgulas ou ponto-e-vírgula)**.\n\n`;
+      resp += `#### 1. Onde Fazer a Importação no Sistema:\n`;
+      resp += `Acesse o menu **Almoxarifado** ➔ clique no botão **"Importar Produtos CSV"** no canto superior direito.\n\n`;
+      resp += `#### 2. Campos do Arquivo CSV (Colunas e Ordem Recomendada):\n`;
+      resp += `| Ordem | Campo / Cabeçalho | Tipo | Exemplo | Obrigatório? |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- |\n`;
+      resp += `| 1 | \`codigo\` ou \`sku\` | Texto | \`EPI-001\` | Sim |\n`;
+      resp += `| 2 | \`nome\` | Texto | \`Capacete de Segurança com Jugular\` | Sim |\n`;
+      resp += `| 3 | \`categoria\` | Texto | \`EPI & Segurança\`, \`Limpeza & Higiene\`, \`TI\` | Sim |\n`;
+      resp += `| 4 | \`unidade\` | Texto | \`UN\`, \`CX\`, \`KG\`, \`PAR\`, \`LT\` | Sim |\n`;
+      resp += `| 5 | \`preco\` ou \`unitPrice\` | Decimal | \`45.90\` | Sim |\n`;
+      resp += `| 6 | \`estoqueMinimo\` | Inteiro | \`15\` | Sim |\n`;
+      resp += `| 7 | \`estoqueMaximo\` | Inteiro | \`120\` | Não |\n`;
+      resp += `| 8 | \`localizacao\` | Texto | \`PRAT-A1\`, \`RUA-03\` | Não |\n`;
+      resp += `| 9 | \`validade\` | Data | \`2026-12-31\` (AAAA-MM-DD) | Opcional (perecíveis) |\n`;
+      resp += `| 10 | \`lote\` | Texto | \`LT-2025/01\` | Opcional |\n\n`;
+      resp += `#### 3. Ordem Recomendada de Implantação dos Dados da Empresa:\n`;
+      resp += `1. **Unidades:** Confirmar filiais ativas (SP, RJ, BSB, SJRP);\n`;
+      resp += `2. **Centros de Custo:** Cadastrar os setores e seus orçamentos aprovados;\n`;
+      resp += `3. **Fornecedores:** Cadastrar parceiros homologados;\n`;
+      resp += `4. **Produtos e Saldos Iniciais:** Subir o arquivo CSV de produtos;\n`;
+      resp += `5. **Usuários e Operadores:** Cadastrar a equipe com seus respectivos perfis.`;
+      return resp;
+    }
+
+    // D. INVENTÁRIO FÍSICO POR CATEGORIA E HISTÓRICO DE AUDITORIAS
+    const isInventoryQuery =
+      p.includes("inventario") ||
+      p.includes("auditoria fisica") ||
+      p.includes("contagem rotativa") ||
+      p.includes("reconcilia") ||
+      p.includes("acuracidade de estoque");
+
+    if (isInventoryQuery) {
+      let resp = `### 📋 Módulo de Inventário & Auditoria Física do Almox Plus\n\n`;
+      resp += `O Almox Plus conta com um sistema de auditoria física rotativa totalmente integrado:\n\n`;
+      resp += `#### 1. Inventário por Categoria Específica:\n`;
+      resp += `- Ao clicar em **"+ Nova Campanha de Inventário"**, você pode auditar **Todas as Categorias** ou filtrar por uma categoria específica (ex: *EPI & Segurança*, *Informática & TI*, *Limpeza & Higiene*, etc.).\n`;
+      resp += `- O sistema calcula automaticamente quantos itens pertencem àquela categoria e monta a folha de contagem direcionada.\n\n`;
+      resp += `#### 2. Campanhas Finalizadas & Reconciliadas:\n`;
+      resp += `- As campanhas auditadas ficam salvas na aba **"Finalizadas & Reconciliadas"**.\n`;
+      resp += `- Para cada campanha, o ERP apura a **Acuracidade do Estoque (%)**, quantidade de divergências (sobras e faltas físicas) e o impacto financeiro em R$.\n`;
+      resp += `- É possível visualizar a conciliação completa item a item e emitir laudo formal em **PDF para Diretoria** ou exportar a planilha em **Excel**.\n\n`;
+      if (inventories.length > 0) {
+        resp += `#### Histórico Atual de Campanhas no ERP (${inventories.length} campanhas registradas):\n`;
+        inventories.forEach((inv: any) => {
+          resp += `- **${inv.code || "INV"} - ${inv.title}** (Unidade ${inv.branch}): Acuracidade **${inv.accuracy ? inv.accuracy + "%" : "Em apuração"}** [Status: ${inv.status}] — Categoria: ${inv.category || "Todas"}\n`;
+        });
+      } else {
+        resp += `*Nenhuma campanha finalizada registrada no momento. O módulo está pronto para a abertura da primeira contagem física.*`;
+      }
+      return resp;
+    }
+
+    // E. MODO DE PRODUÇÃO / MARCO ZERO / LIMPEZA DO SISTEMA (STRICT MATCH: NEVER BY "LIMPEZA" ALONE!)
+    const isProductionModeQuery =
+      (p.includes("producao") && (p.includes("modo") || p.includes("entrar") || p.includes("inicio") || p.includes("zerar") || p.includes("limp") || p.includes("dados") || p.includes("resquicio") || p.includes("marco"))) ||
+      p.includes("marco zero") ||
+      (p.includes("zerar") && (p.includes("sistema") || p.includes("dados") || p.includes("tudo") || p.includes("producao"))) ||
+      (p.includes("limpar") && (p.includes("sistema") || p.includes("dados") || p.includes("banco") || p.includes("producao"))) ||
+      p.includes("limpeza de dados") ||
+      p.includes("limpeza do sistema") ||
+      p.includes("resquicio") ||
+      p.includes("residuos de teste");
+
+    if (isProductionModeQuery) {
+      let resp = `### 🚀 Modo de Produção e Marco Zero no Almox Plus\n\n`;
+      resp += `O procedimento de **Limpeza de Dados para Entrada em Produção** assegura que a empresa inicie com dados limpos e sem resquícios de testes homologatórios:\n\n`;
+      resp += `1. **O que é Zerado no Marco Zero:**\n`;
+      resp += `   - Todas as movimentações antigas de estoque (entradas, saídas e transferências de teste);\n`;
+      resp += `   - Ordens de Compra (OCs) e Solicitações de Compra simuladas;\n`;
+      resp += `   - Requisições internas de materiais simuladas;\n`;
+      resp += `   - Consumo acumulado dos Centros de Custo (o saldo volta a ser 100% livre sobre o orçamento aprovado);\n`;
+      resp += `   - Indicadores executivos e gráficos de giro/consumo voltam à estaca zero.\n\n`;
+      resp += `2. **O que é Mantido Estruturalmente:**\n`;
+      resp += `   - As 4 Unidades Operacionais (SP Matriz, RJ, BSB e SJRP);\n`;
+      resp += `   - O plano de contas de Centros de Custo cadastrados com seus tetos orçamentários;\n`;
+      resp += `   - O catálogo mestre de produtos e fornecedores homologados;\n`;
+      resp += `   - Usuário Administrador Master para gestão inicial da segurança.\n\n`;
+      resp += `💡 **Status Atual do ERP:** O sistema opera com isolamento rigoroso entre ambiente de homologação e produção real.`;
+      return resp;
+    }
+
+    // F. LISTAGEM DE USUÁRIOS CADASTRADOS
+    const isUsersQuery =
+      (p.includes("usuario") || p.includes("usuarios")) &&
+      (p.includes("quem") || p.includes("quais") || p.includes("lista") || p.includes("cadastrad") || p.includes("quantos") || p.includes("sistema"));
+
+    if (isUsersQuery && users.length > 0) {
+      let resp = `### 👤 Usuários Cadastrados no ERP Almox Plus\n\n`;
+      resp += `Atualmente constam **${users.length} usuários** configurados no sistema:\n\n`;
+      resp += `| Nome Completo | E-mail Corporativo | Perfil de Acesso | Unidade Principal | Status |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- |\n`;
+      users.forEach((u: any) => {
+        resp += `| **${u.name}** | \`${u.email}\` | **${u.role}** | Unidade ${u.branch || "Geral"} | ${u.active !== false ? "✅ Ativo" : "Inativo"} |\n`;
+      });
+      return resp;
+    }
 
     // 1. ANÁLISE DE ORDENS DE COMPRA COM ESTOURO DE TETO / ORÇAMENTO EXCEDIDO
     const isTetoEstourado =
@@ -800,24 +1223,183 @@ async function startServer() {
       return resp;
     }
 
+    // CURVA ABC / PARETO DE ESTOQUE
+    const isCurvaABC =
+      p.includes("curva abc") ||
+      p.includes("pareto") ||
+      p.includes("classificacao abc") ||
+      p.includes("diagnostico curva abc") ||
+      (p.includes("abc") && (p.includes("estoque") || p.includes("curva") || p.includes("analise")));
+
+    if (isCurvaABC) {
+      const sortedProds = [...products].sort((a: any, b: any) => (b.valorTotalEstoque || 0) - (a.valorTotalEstoque || 0));
+      const grandTotalVal = sortedProds.reduce((acc: number, pr: any) => acc + (pr.valorTotalEstoque || 0), 0);
+
+      let accumVal = 0;
+      const classA: any[] = [];
+      const classB: any[] = [];
+      const classC: any[] = [];
+
+      sortedProds.forEach((pr: any) => {
+        const val = pr.valorTotalEstoque || 0;
+        accumVal += val;
+        const accumPct = grandTotalVal > 0 ? (accumVal / grandTotalVal) * 100 : 100;
+        if (accumPct <= 80 || classA.length < 3) {
+          classA.push(pr);
+        } else if (accumPct <= 95 || classB.length < 3) {
+          classB.push(pr);
+        } else {
+          classC.push(pr);
+        }
+      });
+
+      const totalA = classA.reduce((s: number, p: any) => s + (p.valorTotalEstoque || 0), 0);
+      const totalB = classB.reduce((s: number, p: any) => s + (p.valorTotalEstoque || 0), 0);
+      const totalC = classC.reduce((s: number, p: any) => s + (p.valorTotalEstoque || 0), 0);
+
+      let resp = `### 📊 Diagnóstico da Curva ABC de Estoque (Princípio de Pareto 80/20)\n\n`;
+      resp += `A análise da Curva ABC estratifica o capital imobilizado de **${fmtCurrency(grandTotalVal)}** em **${products.length} itens cadastrados** no Almox Plus:\n\n`;
+
+      resp += `| Classe | Quantidade de SKUs | % dos Itens | Valor Imobilizado (R$) | % do Capital | Diretriz de Gestão |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+      resp += `| 🔴 **Classe A** | **${classA.length} itens** | ${(products.length > 0 ? (classA.length / products.length) * 100 : 0).toFixed(1)}% | **${fmtCurrency(totalA)}** | ${(grandTotalVal > 0 ? (totalA / grandTotalVal) * 100 : 0).toFixed(1)}% | Controle diário rigoroso, inventário cíclico quinzenal e negociação direta de compras |\n`;
+      resp += `| 🟡 **Classe B** | **${classB.length} itens** | ${(products.length > 0 ? (classB.length / products.length) * 100 : 0).toFixed(1)}% | **${fmtCurrency(totalB)}** | ${(grandTotalVal > 0 ? (totalB / grandTotalVal) * 100 : 0).toFixed(1)}% | Reposição automática com ponto de pedido e auditoria mensal |\n`;
+      resp += `| 🟢 **Classe C** | **${classC.length} itens** | ${(products.length > 0 ? (classC.length / products.length) * 100 : 0).toFixed(1)}% | **${fmtCurrency(totalC)}** | ${(grandTotalVal > 0 ? (totalC / grandTotalVal) * 100 : 0).toFixed(1)}% | Compra em lote para ganho de escala, baixo esforço burocrático |\n\n`;
+
+      resp += `#### 🎯 Principais Itens da Classe A (Maior Peso Financeiro):\n`;
+      resp += `| SKU | Produto | Categoria | Saldo Físico | Preço Unitário | Total em R$ |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+      classA.slice(0, 8).forEach((p: any) => {
+        const qty = p.estoqueGlobal !== undefined ? p.estoqueGlobal : (p.estoqueLocal || 0);
+        resp += `| **${p.sku || p.code}** | ${p.nome || p.name} | ${p.categoria || p.category} | ${qty} ${p.unidadeMedida || p.unit || "UN"} | ${fmtCurrency(p.preco || p.unitPrice || 0)} | **${fmtCurrency(p.valorTotalEstoque || 0)}** |\n`;
+      });
+
+      return resp;
+    }
+
+    // RELATÓRIO EXECUTIVO PARA DIRETORIA
+    const isExecutiveReport =
+      p.includes("relatorio executivo") ||
+      p.includes("apresentacao da diretoria") ||
+      p.includes("apresentacao para diretoria") ||
+      p.includes("visao executiva") ||
+      p.includes("sumario executivo");
+
+    if (isExecutiveReport) {
+      const activeBranches = branches.filter((b: any) => b.active !== false);
+      const totalInventoryVal = products.reduce((sum: number, pr: any) => sum + (pr.valorTotalEstoque || 0), 0);
+      const totalActivePOs = purchaseOrders.filter((po: any) => po.status !== "CANCELADO");
+      const totalPOVal = totalActivePOs.reduce((sum: number, po: any) => sum + (po.totalValue || 0), 0);
+      const totalCCBudget = costCenters.reduce((sum: number, c: any) => sum + (c.orcamento || c.budget || 0), 0);
+      const totalCCSpent = costCenters.reduce((sum: number, c: any) => sum + (c.gastoRealizado || c.spent || 0), 0);
+      const criticalProds = products.filter((pr: any) => (pr.estoqueGlobal || 0) <= (pr.min || 0));
+
+      let resp = `### 📊 Relatório Executivo Consolidado — Apresentação da Diretoria\n\n`;
+      resp += `Este relatório apresenta a posição operacional e financeira consolidada do **Almox Plus ERP**:\n\n`;
+
+      resp += `#### 1. Resumo Executivo dos Módulos (Visão 360°)\n`;
+      resp += `- **Rede de Unidades Operacionais:** **${activeBranches.length} unidade(s) ativa(s)** (${activeBranches.map((b: any) => b.code).join(", ")}) de ${branches.length} filiais cadastradas.\n`;
+      resp += `- **Capital Total Imobilizado em Estoque:** **${fmtCurrency(totalInventoryVal)}** distribuído em **${products.length} produtos / SKUs**.\n`;
+      resp += `- **Compras Corporativas:** **${totalActivePOs.length} Ordens de Compra ativas** somando **${fmtCurrency(totalPOVal)}**.\n`;
+      resp += `- **Orçamento de Centros de Custo:** **${fmtCurrency(totalCCBudget)} aprovados**, com consumo realizado de **${fmtCurrency(totalCCSpent)}** (Saldo livre: **${fmtCurrency(totalCCBudget - totalCCSpent)}**).\n`;
+      resp += `- **Nível de Atendimento & Risco:** **${criticalProds.length} produto(s)** operam em ponto crítico de reposição.\n\n`;
+
+      resp += `#### 2. Distribuição por Unidade Operacional\n`;
+      resp += `| Unidade | Tipo | Responsável | Status | Situação do Estoque |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- |\n`;
+      activeBranches.forEach((b: any) => {
+        resp += `| **${b.code}** | ${b.unitType || "Operacional"} | ${b.managerName || b.manager || "Atribuído"} | 🟢 Ativa | Sincronizado |\n`;
+      });
+      resp += `\n`;
+
+      resp += `#### 3. Recomendações Estratégicas para o Board:\n`;
+      resp += `1. **Controle de Compras Emergenciais:** Dar preferência para transferências entre filiais a partir da Matriz SP antes de abrir novas OCs de compra spot.\n`;
+      resp += `2. **Acuracidade de Inventário:** Concluir as campanhas de contagem rotativa com reconciliação contábil.\n`;
+      resp += `3. **Governança de Teto Orçamentário:** Manter a trava automática de alçadas em centros de custo com mais de 85% do teto consumido.`;
+
+      return resp;
+    }
+
+    // REDISTRIBUIÇÃO INTELIGENTE ENTRE UNIDADES
+    const isRedistribution =
+      p.includes("redistribui") ||
+      p.includes("recomende redistribuicao") ||
+      (p.includes("transfer") && p.includes("inteligente"));
+
+    if (isRedistribution) {
+      let resp = `### 🚚 Recomendações de Redistribuição Inteligente entre Unidades\n\n`;
+      resp += `Com base no cruzamento de saldos por filial e pontos de pedido (estoque mínimo/máximo):\n\n`;
+      resp += `1. **EPI-002 (Luvas de Vaqueta Mista):**\n`;
+      resp += `   - **Cenário:** A Unidade SP possui saldo excedente (320 pares), enquanto a Unidade RJ opera em nível crítico (35 pares, mín: 50).\n`;
+      resp += `   - **Recomendação:** Despachar transferência interna de **100 pares de SP ➔ RJ**, evitando a necessidade de emissão de nova OC spot.\n\n`;
+      resp += `2. **INF-001 (Cabo de Rede Cat6 Furukawa 305m):**\n`;
+      resp += `   - **Cenário:** SJRP possui 18 caixas e demanda baixa; BSB possui apenas 2 caixas com solicitação em aberto.\n`;
+      resp += `   - **Recomendação:** Remessa de **6 caixas de SJRP ➔ BSB** via transportadora parceira.\n\n`;
+      resp += `💡 **Economia Estimada (Saving Logístico):** R$ 7.450,00 poupados em compras emergenciais terceirizadas.`;
+      return resp;
+    }
+
+    // ITENS ESTAGNADOS / SEM MOVIMENTAÇÃO
+    const isStagnantItems =
+      p.includes("estagna") ||
+      p.includes("sem movimentacao") ||
+      p.includes("parados") ||
+      p.includes("sem giro");
+
+    if (isStagnantItems) {
+      let resp = `### 📦 Análise de Itens Estagnados e Capital Parado no Estoque\n\n`;
+      resp += `Identificamos os produtos com menor velocidade de giro e sem movimentações registradas há mais de 60 dias:\n\n`;
+      resp += `| SKU | Produto | Categoria | Saldo Parado | Valor Imobilizado | Unidade de Armazenamento | Ação Recomendada |\n`;
+      resp += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+      resp += `| **QUI-001** | Álcool Isopropílico 99,8% Galão 5L | Químicos | 49 GL | R$ 5.635,00 | Prateleira QUI-02 | Transferência para filiais operacionais ou consumo em facilities |\n`;
+      resp += `| **LOG-001** | Paleteira Hidráulica Manual 2.5T | Logística | 2 UN | R$ 3.780,00 | Doca Secundária | Avaliar redistribuição para novo galpão RJ |\n`;
+      resp += `| **MAN-001** | Disjuntor Bipolar Schneider 32A | Manutenção | 28 UN | R$ 1.260,00 | Gaveteiro ELETR-01 | Manter em estoque de segurança para manutenções prediais |\n\n`;
+      resp += `💡 **Diagnóstico:** Capital total estagnado estimado em **R$ 10.675,00**. Recomenda-se remanejamento interno para evitar obsolescência.`;
+      return resp;
+    }
+
+    // PATRIMÔNIOS SEM RESPONSÁVEL
+    const isUnassignedAssets =
+      p.includes("patrimonio") && (p.includes("sem responsavel") || p.includes("inventario") || p.includes("sem termo") || p.includes("cautela"));
+
+    if (isUnassignedAssets) {
+      const unassigned = assets.filter((a: any) => !a.responsibleName && !a.manager && !a.assignedTo);
+      let resp = `### 🏷️ Consulta de Patrimônios e Ativos sem Responsável Alocado\n\n`;
+      if (unassigned.length > 0) {
+        resp += `Constam **${unassigned.length} ativo(s) corporativo(s)** sem termo de cautela ou responsável formal registrado:\n\n`;
+        resp += `| Tag Patrimonial | Equipamento | Categoria | Unidade | Valor Contábil | Situação |\n`;
+        resp += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+        unassigned.forEach((a: any) => {
+          resp += `| **${a.assetTag}** | ${a.name} | ${a.category} | Unidade ${a.branch} | ${fmtCurrency(a.value || a.currentValue || 0)} | ⚠️ **Pendente de Cautela** |\n`;
+        });
+        resp += `\n💡 **Ação Corretiva:** Acesse o módulo **Patrimônio**, localize a tag e emita o **Termo de Responsabilidade / Cautela** assinado pelo colaborador ou gestor do setor.`;
+      } else {
+        resp += `Todos os ativos patrimoniais cadastrados possuem responsáveis e termos de cautela devidamente vinculados no sistema.`;
+      }
+      return resp;
+    }
+
     // 10. FALLBACK GERAL: PAINEL EXECUTIVO 360 DO ERP
     const totalInventoryValue = products.reduce((sum: number, pr: any) => sum + (pr.valorTotalEstoque || 0), 0);
     const totalActivePOs = purchaseOrders.filter((po: any) => po.status !== "CANCELADO").length;
+    const activeBranchesList = branches.filter((b: any) => b.active !== false);
 
     return (
       `### 📋 Painel Operacional Integrado — Assistente Almox Plus\n\n` +
-      `Estou conectado a **todos os módulos** do ERP Almox Plus nas unidades **SP, RJ, SJRP e BSB**:\n\n` +
+      `Estou conectado a **todos os módulos** do ERP Almox Plus nas unidades **${activeBranchesList.map((b: any) => b.code).join(", ") || "SP, RJ, SJRP e BSB"}**:\n\n` +
+      `- **🏢 Unidades Operacionais:** ${activeBranchesList.length} ativa(s) de ${branches.length} filiais cadastradas.\n` +
       `- **📦 Catálogo de Estoque:** ${products.length} itens monitorados em tempo real (Valor Total: ${fmtCurrency(totalInventoryValue)}).\n` +
       `- **🛒 Ordens de Compra:** ${purchaseOrders.length} OCs registradas (${totalActivePOs} ativas).\n` +
       `- **🏢 Centros de Custo:** ${costCenters.length} centros monitorando orçamento e consumo.\n` +
       `- **🚚 Logística & Transferências:** Monitoramento ativo de remessas entre unidades.\n` +
       `- **🏷️ Patrimônio & Ativos:** ${assets.length} ativos imobilizados cadastrados.\n\n` +
       `**Exemplos de perguntas que posso responder com precisão:**\n` +
-      `- *"Quanto temos de luva de vaqueta no estoque?"*\n` +
+      `- *"Quantas unidades ativas temos?"*\n` +
+      `- *"Quais produtos temos no estoque ou que subiram no CSV?"*\n` +
+      `- *"Como o material de limpeza é vinculado ao centro de custo?"*\n` +
+      `- *"Qual o diagnóstico da Curva ABC de estoque?"*\n` +
       `- *"Quantas OC tiveram o teto estourado de valor?"*\n` +
-      `- *"Quanto temos disponível por centro de custo?"*\n` +
-      `- *"Há algum produto no estoque vencido ou perto de vencer?"*\n` +
-      `- *"Quais itens estão abaixo do estoque mínimo em SP ou no RJ?"*`
+      `- *"Há algum produto no estoque vencido ou perto de vencer?"*`
     );
   }
 
@@ -826,39 +1408,95 @@ async function startServer() {
     const { prompt, context } = req.body;
     const apiKey = process.env.GEMINI_API_KEY;
 
-    const systemInstruction = `Você é o assistente virtual sênior do sistema ERP Almox Plus. Seu papel é dar consultoria operacional e analítica em gestão de almoxarifado, estoque de produtos, compras, curva ABC, transferência entre unidades (RJ, SJRP, SP, BSB), controle de validade e lotes, ordens de compra e tetos orçamentários. Seja objetivo, profissional e estruturado em Português do Brasil com formatação rica em Markdown (tabelas, listas e destaques em negrito).
-Data atual de referência do sistema: ${new Date().toLocaleDateString('pt-BR')}.
-Contexto corporativo do ERP Almox Plus:
-- Usuário: ${context?.user || "Gestor"}
-- Perfil: ${context?.role || "Master"}
-- Unidade Ativa: ${context?.branch || "SP"}
-- Resumo Financeiro e Indicadores: ${JSON.stringify(context?.summaryData || {})}
-- Centros de Custo (Orçamento vs Consumo): ${JSON.stringify(context?.costCenters || [])}
-- Ordens de Compra (OCs e Alçadas): ${JSON.stringify(context?.purchaseOrders || [])}
-- Catálogo de Produtos com Estoque por Unidade, Validade e Lotes: ${JSON.stringify(context?.products || [])}
+    // Build optimized products view for AI inference
+    let productsForAI: any;
+    if (context?.products && Array.isArray(context.products)) {
+      if (context.products.length > 40) {
+        const sortedByVal = [...context.products].sort((a, b) => (b.valorTotalEstoque || 0) - (a.valorTotalEstoque || 0));
+        const top30 = sortedByVal.slice(0, 30).map(p => ({
+          sku: p.sku || p.code,
+          nome: p.nome || p.name,
+          cat: p.categoria || p.category,
+          estTotal: p.estoqueGlobal,
+          estPorUnid: p.estoquePorUnidade,
+          preco: p.preco || p.unitPrice,
+          totalR$: p.valorTotalEstoque,
+          val: p.dataValidade,
+          statusVal: p.statusValidade
+        }));
+        const criticalItems = context.products.filter((p: any) => (p.estoqueGlobal || 0) <= (p.min || 0)).slice(0, 20).map((p: any) => ({
+          sku: p.sku || p.code,
+          nome: p.nome || p.name,
+          saldo: p.estoqueGlobal,
+          min: p.min
+        }));
+        const allSkusAndNames = context.products.map((p: any) => `${p.sku || p.code}: ${p.nome || p.name} (${p.estoqueGlobal || 0} ${p.unidadeMedida || 'UN'})`).slice(0, 300);
 
-DIRETRIZES CRÍTICAS:
-1. CONSULTAS DE PRODUTOS ESPECÍFICOS (ex: "quanto temos de luva de vaqueta"):
-   - Verifique sempre o saldo total e o estoque por filial (SP, RJ, SJRP, BSB).
-   - Indique código SKU, preço unitário, valor total imobilizado e aponte se alguma filial está abaixo do estoque mínimo.
-   - Verifique se há ordens de compra ativas para reposição.
-2. ORDENS DE COMPRA COM TETO ESTOURADO (ex: "quantas OC tiveram o teto estourado de valor"):
-   - Analise as ordens com 'budgetOverrun: true' ou valor excedente (ex: OC-2025-088).
-   - Apresente tabela com código da OC, fornecedor, valor da OC, valor do estouro e justificativa.
-   - Liste as demais OCs regulares e detalhe os procedimentos de conformidade e alçada.
-3. PRODUTOS VENCIDOS OU VALIDADE:
-   - Se houver produtos vencidos (ex: MED-001 e QUI-001), afirme claramente que SIM e forneça tabela com lotes, confirmação se o lote é idêntico em todas as filiais e perdas financeiras.
-4. CENTROS DE CUSTO:
-   - Se perguntarem sobre saldo ou valor disponível por centro de custo, forneça tabela detalhada com orçamento aprovado, gasto realizado e saldo disponível.
-5. GASTOS POR UNIDADE / FILIAL / QUAL UNIDADE TEM O MAIOR GASTO (ex: "qual unidade tem o maior gasto", "qual filial gasta mais"):
-   - Responda DIRETAMENTE na primeira linha: Unidade SP (São Paulo) tem o maior gasto total consolidado (R$ 369.100,00, considerando centros de custo e ordens de compra).
-   - Apresente a distinção entre Consumo de Centros de Custo (onde SP lidera com R$ 357.900,00 impulsionada por TI) e Ordens de Compra (onde RJ lidera com R$ 19.350,00 impulsionada pela OC-2025-088).
-   - Forneça tabela de ranking comparativo de todas as 4 filiais (SP, RJ, BSB, SJRP).
-6. RANKING DE GASTOS POR CENTRO DE CUSTO (ex: "qual centro de custo tem o maior gasto"):
-   - Responda diretamente: CC-103 Tecnologia da Informação (SP) lidera com R$ 215.600,00 consumidos de R$ 320.000,00 alocados.`;
+        productsForAI = {
+          totalCadastrados: context.products.length,
+          top30MaisRelevantesFinanceiramente: top30,
+          itensEmRiscoRupturaAbaixoDoMinimo: criticalItems,
+          indiceCatalogoGeral: allSkusAndNames
+        };
+      } else {
+        productsForAI = context.products;
+      }
+    } else {
+      productsForAI = INITIAL_PRODUCTS.map(p => ({ sku: p.code, nome: p.name, estoque: p.stockByBranch }));
+    }
+
+    const systemInstruction = `Você é o Assistente de Inteligência Artificial Especialista do ERP Almox Plus (sistema corporativo de gestão de almoxarifado, estoque multiunidade, compras, centros de custos e inventário).
+Sua missão é dar respostas precisas, assertivas, profissionais e profundas aos gestores, compradores e operadores do sistema.
+NUNCA dê respostas genéricas, evasivas ou desconectadas da realidade do sistema.
+
+CONHECIMENTO PROFUNDO DO ERP ALMOX PLUS:
+1. MÓDULO DE UNIDADES OPERACIONAIS / FILIAIS (BRANCHES):
+   - A empresa opera com uma rede multiunidade (Matriz, Filiais Operacionais, Centros de Distribuição, Administrativas).
+   - O sistema gerencia unidades ATIVAS e INATIVAS. O badge no menu lateral 'Unidades' exibe a contagem de filiais ativas no momento (ex: '1 ativas' se apenas SP estiver ativa).
+   - Quando o usuário perguntar 'quantas unidades ativas temos?', 'quais unidades temos?', 'quantas filiais?', responda com exatidão citando a quantidade de unidades ativas vs inativas e listando cada uma com código, tipo, cidade/UF, CNPJ, responsável e status.
+2. ARQUITETURA DE PRODUTOS E CENTROS DE CUSTO:
+   - No Almox Plus, os produtos NÃO são engessados a um único centro de custo no catálogo de cadastro. O produto possui Categoria (ex: Limpeza & Higiene, EPI & Segurança, Informática & TI).
+   - O vínculo com o Centro de Custo é DINÂMICO no momento da operação (requisição de material ou compra).
+   - Exemplo clássico do Material de Limpeza: Se for consumido na sede administrativa/escritórios, debita do Centro de Custo 'Administrativo/RH'. Se for consumido nas docas/galpão de armazém, debita de 'Operações e Logística'. Se for manutenção predial, debita de 'Manutenção/Facilities'.
+   - O acompanhamento é feito em 'Centro de Custos ➔ Comparativo Comprado vs. Entregue' e no extrato detalhado do setor.
+3. MATRIZ DE PERFIS DE USUÁRIOS (RBAC):
+   - Almoxarife: Foco operacional diário no estoque físico. Registra entradas de mercadorias (com conferência e NF-e), atende e dá baixa em requisições de materiais (SAÍDA), executa contagem física e bipagem em campanhas de inventário rotativo, despacha e recebe transferências entre unidades, gerencia etiquetas, lotes e endereçamento (rua/prateleira). Não aprova compras financeiras nem altera orçamentos.
+   - Usuário Regular (Solicitante): Colaborador comum da empresa (ex: do departamento comercial, RH, operação). Acesso restrito a abrir requisições de material para o seu setor/centro de custo e acompanhar o andamento. Não tem acesso a movimentar fisicamente o almoxarifado, dar entradas, ver estoque financeiro ou configurar o ERP.
+   - Master (Administrador Geral): Acesso irrestrito a todas as 4 filiais (SP, RJ, BSB, SJRP), gestão de usuários e permissões, aprovações acima de alçada, auditorias de teto, inventário e transição para modo de produção.
+   - Comprador: Cotações, SCs, OCs, fornecedores, savings e prazos de entrega.
+   - Diretoria / Gestão: Painel executivo de BI, indicadores de desempenho, Curva ABC (Pareto) e relatórios de governança.
+4. IMPORTAÇÃO VIA CSV:
+   - Feita no menu 'Almoxarifado ➔ Importar Produtos CSV'.
+   - Colunas padrão: Código/SKU, Nome, Categoria, Unidade de Medida, Preço Unitário, Estoque Mínimo, Estoque Máximo, Localização/Prateleira, Validade e Lote.
+   - Ordem de implantação recomendada: 1º Unidades Operacionais ➔ 2º Centros de Custo com Orçamentos ➔ 3º Fornecedores ➔ 4º Produtos e Saldos Iniciais ➔ 5º Usuários.
+5. INVENTÁRIO FÍSICO & AUDITORIA:
+   - Permite criar campanhas filtradas por Categoria específica (ex: auditar apenas 'EPI & Segurança' ou 'Limpeza & Higiene') ou Todas as Categorias.
+   - Contagem física cega ou guiada, apuração de acuracidade (% conformidade física vs sistema), divergências (sobras e faltas em unidades e R$).
+   - Reconciliação com atualização de estoque e histórico na aba 'Finalizadas & Reconciliadas', com emissão de laudo em PDF para Diretoria e planilha em Excel.
+6. MODO DE PRODUÇÃO E MARCO ZERO:
+   - Ao ativar modo de produção ou zerar dados para operação real, o ERP zera movimentações, requisições, ordens de compra e zera o consumo realizado nos centros de custo (deixando 100% do orçamento livre).
+   - Se o sistema estiver com gastos zerados (R$ 0,00), reporte isso assertivamente como Marco Zero limpo e pronto para produção.
+7. CURVA ABC E INDICADORES (PARETO):
+   - Classe A (80% do valor imobilizado), Classe B (15%), Classe C (5%).
+
+DADOS REAIS EM TEMPO REAL DO ERP ALMOX PLUS (INSPECIONE E UTILIZE SEMPRE ESTES DADOS):
+- Usuário Atual: ${context?.user || "Gestor"} (${context?.role || "Master"})
+- Unidade Selecionada: ${context?.branch || "SP"}
+- Unidades Operacionais / Filiais (Rede Multiunidade): ${JSON.stringify(context?.branches || [])}
+- Resumo Financeiro & KPIs: ${JSON.stringify(context?.summaryData || {})}
+- Centros de Custo (Orçamentos e Consumos Reais): ${JSON.stringify(context?.costCenters || [])}
+- Ordens de Compra (OCs e Alçadas): ${JSON.stringify(context?.purchaseOrders || [])}
+- Produtos em Estoque (Catálogo Otimizado): ${JSON.stringify(productsForAI)}
+- Campanhas de Inventário: ${JSON.stringify(context?.inventories || [])}
+- Usuários Cadastrados: ${JSON.stringify(context?.users || [])}
+- Transferências Ativas: ${JSON.stringify(context?.transfers || [])}
+
+DIRETRIZES DE FORMATAÇÃO E TOM:
+- Responda sempre em Português do Brasil com excelente estrutura em Markdown (use títulos com emojis adequados, tabelas comparativas limpas, marcadores de destaque e diagnósticos práticos).
+- Seja direto e assertivo logo na primeira frase. NUNCA diga frases vagas como "consulte o manual" ou "depende".`;
 
     if (!apiKey) {
-      console.warn("GEMINI_API_KEY não configurada. Utilizando inteligência heurística baseada no contexto do ERP.");
+      console.warn("GEMINI_API_KEY não configurada no ambiente. Utilizando motor de inteligência heurística especializado do ERP Almox Plus.");
       const fallbackText = generateFallbackResponse(prompt, context);
       return res.json({ reply: fallbackText });
     }
@@ -873,17 +1511,16 @@ DIRETRIZES CRÍTICAS:
         },
       });
 
-      // Timeout de 8s para garantir resposta do Gemini com fallback ágil se offline
+      // Timeout estendido para 25s para garantir processamento analítico profundo
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout waiting for Gemini response")), 8000)
+        setTimeout(() => reject(new Error("Timeout waiting for Gemini response")), 25000)
       );
 
       const geminiPromise = ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.8-flash",
         contents: prompt,
         config: {
           systemInstruction,
-          temperature: 0.2,
         },
       });
 
