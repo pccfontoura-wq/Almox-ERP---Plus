@@ -1452,7 +1452,7 @@ NUNCA dê respostas genéricas, evasivas ou desconectadas da realidade do sistem
 CONHECIMENTO PROFUNDO DO ERP ALMOX PLUS:
 1. MÓDULO DE UNIDADES OPERACIONAIS / FILIAIS (BRANCHES):
    - A empresa opera com uma rede multiunidade (Matriz, Filiais Operacionais, Centros de Distribuição, Administrativas).
-   - O sistema gerencia unidades ATIVAS e INATIVAS. O badge no menu lateral 'Unidades' exibe a contagem de filiais ativas no momento (ex: '1 ativas' se apenas SP estiver ativa).
+   - O sistema gerencia unidades ATIVAS e INATIVAS. CONTAGENS SEMPRE PELOS DADOS: quando o usuario perguntar quantas unidades ativas/filiais/produtos existem, calcule a resposta EXCLUSIVAMENTE a partir dos campos activeBranchesCount, totalBranches, totalProducts e summaryData fornecidos no contexto. NUNCA use numeros memorizados, exemplos do prompt ou valores de treinamento. Se o dado nao estiver no contexto, diga explicitamente: Nao possuo esse dado no sistema no momento.
    - Quando o usuário perguntar 'quantas unidades ativas temos?', 'quais unidades temos?', 'quantas filiais?', responda com exatidão citando a quantidade de unidades ativas vs inativas e listando cada uma com código, tipo, cidade/UF, CNPJ, responsável e status.
 2. ARQUITETURA DE PRODUTOS E CENTROS DE CUSTO:
    - No Almox Plus, os produtos NÃO são engessados a um único centro de custo no catálogo de cadastro. O produto possui Categoria (ex: Limpeza & Higiene, EPI & Segurança, Informática & TI).
@@ -1493,11 +1493,12 @@ DADOS REAIS EM TEMPO REAL DO ERP ALMOX PLUS (INSPECIONE E UTILIZE SEMPRE ESTES D
 
 DIRETRIZES DE FORMATAÇÃO E TOM:
 - Responda sempre em Português do Brasil com excelente estrutura em Markdown (use títulos com emojis adequados, tabelas comparativas limpas, marcadores de destaque e diagnósticos práticos).
-- Seja direto e assertivo logo na primeira frase. NUNCA diga frases vagas como "consulte o manual" ou "depende".`;
+- Seja direto e assertivo logo na primeira frase. NUNCA diga frases vagas como "consulte o manual" ou "depende".
+- ANTI-GENERICIDADE: Se o dado necessario para responder nao estiver presente no contexto fornecido, responda honestamente que o dado nao esta disponivel no sistema neste momento. NUNCA invente numeros, nomes de produtos, unidades ou metricas. Sempre que a pergunta envolver contagens (itens, unidades, OCs, requisisoes), calcule a partir dos dados do contexto e cite de qual campo obteve o numero.`;
 
     if (!apiKey) {
       console.warn("GEMINI_API_KEY não configurada no ambiente. Utilizando motor de inteligência heurística especializado do ERP Almox Plus.");
-      const fallbackText = generateFallbackResponse(prompt, context);
+      const fallbackText = "⚠️ Resposta gerada pelo motor local do ERP (API Gemini indisponível neste momento).\n\n" + generateFallbackResponse(prompt, context);
       return res.json({ reply: fallbackText });
     }
 
@@ -1513,7 +1514,7 @@ DIRETRIZES DE FORMATAÇÃO E TOM:
 
       // Timeout estendido para 25s para garantir processamento analítico profundo
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout waiting for Gemini response")), 25000)
+        setTimeout(() => reject(new Error("Timeout waiting for Gemini response")), 60000)
       );
 
       const geminiPromise = ai.models.generateContent({
@@ -1525,11 +1526,11 @@ DIRETRIZES DE FORMATAÇÃO E TOM:
       });
 
       const response = await Promise.race([geminiPromise, timeoutPromise]);
-      const replyText = response.text || generateFallbackResponse(prompt, context);
+      const replyText = response.text || ("⚠️ Resposta gerada pelo motor local do ERP (API Gemini indisponível neste momento).\n\n" + generateFallbackResponse(prompt, context));
       return res.json({ reply: replyText });
     } catch (error: any) {
       console.warn("Gemini API Fallback acionado:", error?.message || error);
-      const fallbackText = generateFallbackResponse(prompt, context);
+      const fallbackText = "⚠️ Resposta gerada pelo motor local do ERP (API Gemini indisponível neste momento).\n\n" + generateFallbackResponse(prompt, context);
       return res.json({ reply: fallbackText });
     }
   });

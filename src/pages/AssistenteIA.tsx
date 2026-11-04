@@ -1565,7 +1565,7 @@ export const AssistenteIA: React.FC = () => {
     } catch (err) {
       console.warn('API /api/gemini indisponível ou com latência. Ativando resposta inteligente contextual do ERP:', err);
       // Fallback local instantâneo com base no estado integral do ERP
-      const fallbackReply = generateClientAnalysis(textToSend, selectedBranch);
+      const fallbackReply = '⚠️ Resposta gerada pelo motor local do ERP (API Gemini indisponível neste momento).\n\n' + generateClientAnalysis(textToSend, selectedBranch);
       const aiMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: 'AI',
