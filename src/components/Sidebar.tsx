@@ -34,7 +34,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, open 
     { id: 'unidades', label: 'Unidades', icon: Building2, badge: `${(state.branches || []).filter(b => b.active).length} ativas` },
     { id: 'relatorios', label: 'Relatórios', icon: BarChart3 },
     { id: 'indicadores', label: 'Indicadores KPIs', icon: TrendingUp },
-    { id: 'assistente-ia', label: 'Assistente IA', icon: Bot, isNew: true },
+    // MODULO ASSISTENTE IA INATIVADO TEMPORARIAMENTE PARA VALIDACAO DO SISTEMA (reativar em versao futura)
+    // { id: 'assistente-ia', label: 'Assistente IA', icon: Bot, isNew: true },
     { id: 'administracao', label: 'Administração', icon: ShieldCheck, allowedRoles: ['Master', 'Gestor'] as UserRole[] },
     { id: 'configuracoes', label: 'Configurações', icon: Settings },
     { id: 'meu-perfil', label: 'Meu Perfil', icon: User }

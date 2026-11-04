@@ -335,14 +335,7 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
           >
             Nova Movimentação
           </Button>
-          <Button
-            variant="outlined"
-            onClick={() => setAiReportModalOpen(true)}
-            startIcon={<Sparkles className="w-4 h-4 text-amber-400" />}
-            className="border-amber-500/50 text-amber-300 hover:bg-amber-950/40 font-bold text-xs"
-          >
-            Resumo da Diretoria IA
-          </Button>
+          {/* RESUMO IA INATIVADO TEMPORARIAMENTE PARA VALIDACAO DO SISTEMA */}
         </Box>
       </Box>
 

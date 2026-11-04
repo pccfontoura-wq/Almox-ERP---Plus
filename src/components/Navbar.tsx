@@ -139,15 +139,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar, onNavigateToTab
               </IconButton>
             </Tooltip>
 
-            {/* AI Assistant Quick Link */}
-            <Tooltip title="Assistente IA AlmoxBot">
-              <IconButton 
-                onClick={() => onNavigateToTab?.('assistente-ia')} 
-                className={`${buttonStyleClass} bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/60`}
-              >
-                <AppIcon icon={Bot} size={18} className="text-purple-600 dark:text-purple-400" />
-              </IconButton>
-            </Tooltip>
+            {/* MODULO ASSISTENTE IA INATIVADO TEMPORARIAMENTE PARA VALIDACAO DO SISTEMA */}
 
             {/* Theme Toggle */}
             <Tooltip title={mode === 'light' ? 'Modo Escuro' : 'Modo Claro'}>
