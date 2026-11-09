@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import {
   ClipboardCheck, Plus, CheckCircle2, AlertTriangle, RefreshCw, FileDown,
-  Printer, FileText, Filter, Search, Award, TrendingUp, CheckCircle, Clock, RotateCcw
+  Printer, FileText, Filter, Search, Award, TrendingUp, CheckCircle, Clock, RotateCcw, Building2
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -19,7 +19,7 @@ import { exportInventoryCountSheetPDF, exportInventoryReconciliationPDF, exportT
 
 export const Inventario: React.FC = () => {
   const { currentUser } = useAuth();
-  const { selectedBranch, refreshData, dataVersion } = useApp();
+  const { selectedBranch, setSelectedBranch, refreshData, dataVersion } = useApp();
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [activeAudit, setActiveAudit] = useState<InventoryAudit | null>(null);
@@ -29,6 +29,13 @@ export const Inventario: React.FC = () => {
 
   // Status Tab: 'TODAS' | 'EM_ANDAMENTO' | 'CONCLUIDO'
   const [tabStatus, setTabStatus] = useState<'TODAS' | 'EM_ANDAMENTO' | 'CONCLUIDO'>('TODAS');
+
+  // Page-level branch filter - defaults to 'TODAS' so Master users always see all branch campaigns
+  const [pageBranchFilter, setPageBranchFilter] = useState<Branch | 'TODAS'>('TODAS');
+
+  // Replication dialog states
+  const [replicateModalAudit, setReplicateModalAudit] = useState<InventoryAudit | null>(null);
+  const [targetReplicateBranch, setTargetReplicateBranch] = useState<Branch>('SP');
 
   // Creation form states
   const [title, setTitle] = useState('');
@@ -74,10 +81,19 @@ export const Inventario: React.FC = () => {
     }).length;
   }, [state.products, targetCategory]);
 
-  // All inventories filtered by active branch (or GLOBAL)
+  // Campaign count breakdown by branch
+  const branchCounts = useMemo(() => {
+    const map: Record<string, number> = { TODAS: state.inventories.length };
+    state.inventories.forEach(i => {
+      map[i.branch] = (map[i.branch] || 0) + 1;
+    });
+    return map;
+  }, [state.inventories]);
+
+  // All inventories filtered by pageBranchFilter
   const allBranchInventories = useMemo(() => {
-    return state.inventories.filter(i => selectedBranch === 'GLOBAL' || i.branch === selectedBranch);
-  }, [state.inventories, selectedBranch]);
+    return state.inventories.filter(i => pageBranchFilter === 'TODAS' || i.branch === pageBranchFilter);
+  }, [state.inventories, pageBranchFilter]);
 
   // Filtered by active tab status
   const displayedInventories = useMemo(() => {
@@ -143,7 +159,39 @@ export const Inventario: React.FC = () => {
         );
       }
     },
-    { id: 'branch', label: 'Unidade', accessor: (i) => i.branch },
+    {
+      id: 'branch',
+      label: 'Unidade Auditada',
+      accessor: (i) => i.branch,
+      render: (i) => (
+        <Box className="flex items-center gap-1.5 flex-wrap">
+          <Chip
+            label={`Unidade ${i.branch}`}
+            size="small"
+            className={`font-bold text-[10px] h-5 ${
+              i.branch === 'RJ'
+                ? 'bg-amber-100 text-amber-900 border border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800'
+                : 'bg-blue-100 text-blue-900 border border-blue-300 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800'
+            }`}
+          />
+          {selectedBranch !== i.branch && (
+            <Tooltip title={`Alternar visão do sistema para a Unidade ${i.branch}`}>
+              <Button
+                size="small"
+                variant="text"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedBranch(i.branch);
+                }}
+                className="text-[10px] py-0 px-1 text-blue-600 dark:text-blue-400 hover:underline min-w-0 font-bold"
+              >
+                Ver {i.branch}
+              </Button>
+            </Tooltip>
+          )}
+        </Box>
+      )
+    },
     {
       id: 'status',
       label: 'Status da Campanha',
@@ -412,7 +460,13 @@ export const Inventario: React.FC = () => {
       setCounts(updatedCounts);
 
       refreshData();
-      alert(`Inventário ${reconciled.code} reconciliado com sucesso! Saldos de estoque atualizados na unidade ${reconciled.branch} e laudo emitido.`);
+      if (selectedBranch !== 'GLOBAL' && selectedBranch !== reconciled.branch) {
+        if (confirm(`Inventário ${reconciled.code} reconciliado com sucesso na Unidade ${reconciled.branch}!\n\nSeu sistema está visualizando atualmente a Unidade ${selectedBranch}.\nDeseja alternar a visualização para a Unidade ${reconciled.branch} agora para ver os novos saldos no Almoxarifado?`)) {
+          setSelectedBranch(reconciled.branch);
+        }
+      } else {
+        alert(`Inventário ${reconciled.code} reconciliado com sucesso! Saldos de estoque atualizados na Unidade ${reconciled.branch} e laudo emitido.`);
+      }
     } catch (e: any) {
       alert(e.message);
     }
@@ -526,7 +580,7 @@ export const Inventario: React.FC = () => {
         <strong>Inventário Cíclico & Rotativo por Categoria:</strong> Você pode abrir campanhas de inventário para <strong>Todas as Categorias</strong> ou focar em categorias específicas (ex: <em>EPI & Segurança</em>, <em>Elétrica</em>, <em>Ferramentas</em>). O sistema gera a <strong>Folha de Contagem Cega em PDF</strong> para a equipe de campo e, após a reconciliação, mantém o histórico permanente com emissão do <strong>Laudo Oficial de Auditoria</strong>.
       </Alert>
 
-      {/* STATUS TABS */}
+      {/* STATUS TABS & BRANCH QUICK SELECTOR */}
       <Card className="rounded-2xl border-slate-200 dark:border-slate-800 shadow-xs">
         <Box className="px-4 pt-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
           <Tabs
@@ -589,15 +643,51 @@ export const Inventario: React.FC = () => {
           </Button>
         </Box>
 
+        {/* QUICK BRANCH FILTER BAR */}
+        <Box className="px-4 py-2.5 bg-slate-50/70 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5" />
+              Exibir Campanhas da Unidade:
+            </span>
+            <Chip
+              clickable
+              label={`🌐 Todas as Unidades (${branchCounts['TODAS'] || 0})`}
+              color={pageBranchFilter === 'TODAS' ? 'primary' : 'default'}
+              variant={pageBranchFilter === 'TODAS' ? 'filled' : 'outlined'}
+              size="small"
+              onClick={() => setPageBranchFilter('TODAS')}
+              className="text-xs font-bold"
+            />
+            {dataService.getBranches(true).map(b => (
+              <Chip
+                key={b.id}
+                clickable
+                label={`🏢 ${b.code} (${branchCounts[b.code] || 0})`}
+                color={pageBranchFilter === b.code ? 'primary' : 'default'}
+                variant={pageBranchFilter === b.code ? 'filled' : 'outlined'}
+                size="small"
+                onClick={() => setPageBranchFilter(b.code)}
+                className="text-xs font-bold"
+              />
+            ))}
+          </div>
+
+          <div className="text-[11px] text-slate-500">
+            Filtro da barra superior: <strong className="text-blue-600 dark:text-blue-400">{selectedBranch === 'GLOBAL' ? 'Todas as Unidades' : `Unidade ${selectedBranch}`}</strong>
+          </div>
+        </Box>
+
         <Box className="p-4">
           <DataTable
             title="Campanhas de Inventário Físico"
-            subTitle={`Histórico de auditorias físicas de estoque para a unidade: ${selectedBranch}`}
+            subTitle={pageBranchFilter === 'TODAS' ? 'Histórico consolidado de auditorias físicas de estoque em todas as unidades' : `Histórico de auditorias físicas de estoque para a unidade: ${pageBranchFilter}`}
             columns={inventoryColumns}
             data={displayedInventories}
             onAddClick={() => setCreateModalOpen(true)}
             addButtonLabel="Iniciar Nova Campanha de Inventário"
             canEditOrAdd={canEdit}
+            initialUnitFilter="GLOBAL"
           />
         </Box>
       </Card>
@@ -952,6 +1042,20 @@ export const Inventario: React.FC = () => {
                   {canEdit && (
                     <Button
                       variant="outlined"
+                      color="info"
+                      startIcon={<RefreshCw className="w-4 h-4 text-blue-600" />}
+                      onClick={() => {
+                        setReplicateModalAudit(activeAudit);
+                        setTargetReplicateBranch(activeAudit.branch === 'SP' ? 'RJ' : 'SP');
+                      }}
+                      className="border-blue-400 text-blue-700 dark:text-blue-300 hover:bg-blue-50 text-xs font-bold"
+                    >
+                      Replicar para Outra Unidade
+                    </Button>
+                  )}
+                  {canEdit && (
+                    <Button
+                      variant="outlined"
                       color="warning"
                       startIcon={<RotateCcw className="w-4 h-4 text-amber-600" />}
                       onClick={() => handleReopenAudit(activeAudit)}
@@ -997,6 +1101,65 @@ export const Inventario: React.FC = () => {
           </DialogActions>
         </Dialog>
       )}
+
+      {/* REPLICATE INVENTORY TO ANOTHER BRANCH DIALOG */}
+      <Dialog
+        open={Boolean(replicateModalAudit)}
+        onClose={() => setReplicateModalAudit(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle className="font-bold flex items-center gap-2 border-b border-slate-200 dark:border-slate-800">
+          <RefreshCw className="w-5 h-5 text-blue-600" />
+          <span>Replicar Saldos de Inventário</span>
+        </DialogTitle>
+        <DialogContent dividers className="space-y-3 py-4 text-xs">
+          <Typography className="text-xs text-slate-600 dark:text-slate-300">
+            Você está prestes a aplicar os saldos físicos apurados na campanha <strong>{replicateModalAudit?.title}</strong> ({replicateModalAudit?.code}) em outra filial da rede.
+          </Typography>
+          <FormControl fullWidth size="small">
+            <InputLabel>Unidade de Destino</InputLabel>
+            <Select
+              value={targetReplicateBranch}
+              onChange={(e) => setTargetReplicateBranch(e.target.value as Branch)}
+              label="Unidade de Destino"
+            >
+              {dataService.getBranches(true).map(b => (
+                <MenuItem key={b.id} value={b.code}>
+                  {b.code} - {b.name} ({b.city}/{b.state})
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Alert severity="warning" className="text-xs rounded-xl">
+            Esta operação atualizará imediatamente o estoque físico de todos os <strong>{replicateModalAudit?.items.length} itens</strong> na <strong>Unidade {targetReplicateBranch}</strong> com base na contagem apurada.
+          </Alert>
+        </DialogContent>
+        <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900">
+          <Button onClick={() => setReplicateModalAudit(null)} color="inherit" className="text-xs">
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={() => {
+              if (!replicateModalAudit || !currentUser) return;
+              try {
+                dataService.replicateInventoryToBranch(replicateModalAudit.id, targetReplicateBranch, currentUser);
+                refreshData();
+                setReplicateModalAudit(null);
+                setSelectedBranch(targetReplicateBranch);
+                alert(`Saldos do inventário aplicados com sucesso na Unidade ${targetReplicateBranch}! A visão do sistema foi alternada para esta unidade.`);
+              } catch (err: any) {
+                alert(err.message);
+              }
+            }}
+            className="bg-blue-600 hover:bg-blue-700 font-bold text-xs"
+          >
+            Confirmar e Aplicar na Unidade {targetReplicateBranch}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

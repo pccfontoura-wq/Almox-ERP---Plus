@@ -56,6 +56,7 @@ interface DataTableProps<T> {
   onAddClick?: () => void;
   addButtonLabel?: string;
   canEditOrAdd?: boolean;
+  initialUnitFilter?: Branch | 'GLOBAL';
 }
 
 export function DataTable<T extends { id: string }>({
@@ -65,12 +66,16 @@ export function DataTable<T extends { id: string }>({
   data,
   onAddClick,
   addButtonLabel = 'Novo Registro',
-  canEditOrAdd = true
+  canEditOrAdd = true,
+  initialUnitFilter
 }: DataTableProps<T>) {
   const { selectedBranch } = useApp();
 
   const [search, setSearch] = useState('');
-  const [unitFilter, setUnitFilter] = useState<Branch | 'GLOBAL'>(selectedBranch);
+  const [unitFilter, setUnitFilter] = useState<Branch | 'GLOBAL'>(() => {
+    if (initialUnitFilter) return initialUnitFilter;
+    return selectedBranch;
+  });
   const [categoryFilter, setCategoryFilter] = useState<string>('TODAS');
   const [periodFilter, setPeriodFilter] = useState<TablePeriodFilter>('ALL');
   const [customStartDate, setCustomStartDate] = useState<string>(() => {
@@ -92,11 +97,13 @@ export function DataTable<T extends { id: string }>({
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<'EXCEL' | 'PDF'>('EXCEL');
 
-  // Sync unitFilter when global selectedBranch changes in Navbar
+  // Sync unitFilter when global selectedBranch changes in Navbar (unless explicitly pinned by initialUnitFilter)
   useEffect(() => {
-    setUnitFilter(selectedBranch);
-    setPage(0);
-  }, [selectedBranch]);
+    if (!initialUnitFilter) {
+      setUnitFilter(selectedBranch);
+      setPage(0);
+    }
+  }, [selectedBranch, initialUnitFilter]);
 
   const state = dataService.getState();
   const activeBranches = useMemo(() => dataService.getBranches(true), [state.branches]);

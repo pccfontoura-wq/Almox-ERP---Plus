@@ -24,7 +24,7 @@ import {
 
 export const Almoxarifado: React.FC = () => {
   const { currentUser } = useAuth();
-  const { selectedBranch, refreshData } = useApp();
+  const { selectedBranch, setSelectedBranch, refreshData } = useApp();
 
   const [currentTab, setCurrentTab] = useState(0);
 
@@ -114,6 +114,19 @@ export const Almoxarifado: React.FC = () => {
   const transfers = state.transfers;
   const requisitions = state.requisitions;
 
+  const branchesWithStockList = React.useMemo(() => {
+    if (selectedBranch === 'GLOBAL') return [];
+    const set = new Set<Branch>();
+    products.forEach(p => {
+      Object.entries(p.stockByBranch || {}).forEach(([b, qty]) => {
+        if (b !== selectedBranch && typeof qty === 'number' && qty > 0) {
+          set.add(b as Branch);
+        }
+      });
+    });
+    return Array.from(set);
+  }, [products, selectedBranch]);
+
   const getProductCategory = (productId: string) => {
     return state.products.find(p => p.id === productId)?.category || 'Geral';
   };
@@ -127,7 +140,7 @@ export const Almoxarifado: React.FC = () => {
     { id: 'unit', label: 'Unidade', accessor: (p) => p.unit },
     {
       id: 'stock',
-      label: 'Estoque Local / Mínimo',
+      label: selectedBranch === 'GLOBAL' ? 'Estoque Consolidado (Todas as Unidades)' : `Estoque Local (${selectedBranch})`,
       accessor: (p) => {
         return selectedBranch === 'GLOBAL'
           ? Object.values(p.stockByBranch).reduce((a, b) => a + b, 0)
@@ -138,13 +151,53 @@ export const Almoxarifado: React.FC = () => {
           ? Object.values(p.stockByBranch).reduce((a, b) => a + b, 0)
           : (p.stockByBranch[selectedBranch] || 0);
         const isLow = qty <= p.minStock;
+
+        // Collect other branches that have stock
+        const otherBranchesWithStock: Array<{ branch: Branch; qty: number }> = [];
+        if (selectedBranch !== 'GLOBAL') {
+          Object.entries(p.stockByBranch || {}).forEach(([b, count]) => {
+            if (b !== selectedBranch && count > 0) {
+              otherBranchesWithStock.push({ branch: b as Branch, qty: count });
+            }
+          });
+        }
+
         return (
-          <Box className="flex items-center gap-2">
-            <Typography className={`font-bold text-xs ${isLow ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-200'}`}>
-              {qty} {p.unit}
-            </Typography>
-            {isLow && (
-              <Chip label="Crítico" size="small" color="error" className="text-[9px] h-4 font-bold" />
+          <Box className="flex flex-col gap-1">
+            <Box className="flex items-center gap-1.5">
+              <Typography className={`font-bold text-xs ${isLow ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-200'}`}>
+                {qty} {p.unit}
+              </Typography>
+              {isLow && (
+                <Chip
+                  label={qty === 0 ? '0 no Local' : 'Crítico'}
+                  size="small"
+                  color="error"
+                  className="text-[9px] h-4 font-bold"
+                />
+              )}
+            </Box>
+            {otherBranchesWithStock.length > 0 && (
+              <Box className="flex items-center gap-1 flex-wrap">
+                {otherBranchesWithStock.map(ob => (
+                  <Tooltip
+                    key={ob.branch}
+                    title={`Existe estoque deste item na Unidade ${ob.branch} (${ob.qty} ${p.unit}). Clique para alternar para ${ob.branch}.`}
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedBranch(ob.branch);
+                      }}
+                      className="text-[9px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900 border border-blue-200 dark:border-blue-800 px-1 py-0.5 rounded flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <span>📦 {ob.branch}: {ob.qty}</span>
+                      <span className="text-[8px] underline">Ver {ob.branch}</span>
+                    </button>
+                  </Tooltip>
+                ))}
+              </Box>
             )}
           </Box>
         );
@@ -513,9 +566,42 @@ export const Almoxarifado: React.FC = () => {
             </div>
           </Box>
 
+          {branchesWithStockList.length > 0 && selectedBranch !== 'GLOBAL' && (
+            <Alert
+              severity="info"
+              className="rounded-xl border border-blue-200 dark:border-blue-900 shadow-xs mb-3"
+              action={
+                <Box className="flex items-center gap-2 flex-wrap">
+                  {branchesWithStockList.map(b => (
+                    <Button
+                      key={b}
+                      size="small"
+                      variant="contained"
+                      onClick={() => setSelectedBranch(b)}
+                      className="text-xs bg-blue-600 hover:bg-blue-700 text-white font-bold"
+                    >
+                      Ver Unidade {b}
+                    </Button>
+                  ))}
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setSelectedBranch('GLOBAL')}
+                    className="text-xs font-bold"
+                  >
+                    Ver Todas as Unidades
+                  </Button>
+                </Box>
+              }
+            >
+              Você está visualizando os saldos da <strong>Unidade {selectedBranch}</strong>. Existem produtos com estoque apurado em outras unidades (ex:{' '}
+              <strong>{branchesWithStockList.map(b => `Unidade ${b}`).join(', ')}</strong>).
+            </Alert>
+          )}
+
           <DataTable
             title="Catálogo Geral de Produtos"
-            subTitle={`Estoque ativo para a unidade: ${selectedBranch}`}
+            subTitle={selectedBranch === 'GLOBAL' ? 'Estoque consolidado de todas as unidades da rede' : `Estoque ativo para a unidade: ${selectedBranch}`}
             columns={productColumns}
             data={products}
             onAddClick={() => {

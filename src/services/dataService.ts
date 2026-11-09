@@ -244,15 +244,20 @@ class DataService {
     return initialState;
   }
 
+  private lastLocalSaveTime: number = Date.now();
+
   public saveState(newState?: AppState, skipCloudPush = false) {
     if (newState) {
       this.state = newState;
     }
+    this.lastLocalSaveTime = Date.now();
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
     } catch (e) {
       console.error('Erro ao salvar estado no localStorage:', e);
     }
+
+    this.notifyListeners();
 
     if (!skipCloudPush && !this.isSyncingFromCloud && typeof window !== 'undefined') {
       if (this.cloudPushTimer) {
@@ -260,7 +265,7 @@ class DataService {
       }
       this.cloudPushTimer = setTimeout(() => {
         this.pushStateToCloud();
-      }, 1000);
+      }, 500);
     }
   }
 
@@ -278,6 +283,11 @@ class DataService {
         if (snapshot.exists()) {
           const cloudData = snapshot.data();
           if (cloudData && cloudData.state) {
+            // Guard: don't overwrite if local changes are more recent than cloud data
+            const cloudUpdatedAt = cloudData.updatedAt ? new Date(cloudData.updatedAt).getTime() : 0;
+            if (this.cloudPushTimer && cloudUpdatedAt < this.lastLocalSaveTime) {
+              return;
+            }
             this.isSyncingFromCloud = true;
             this.state = cloudData.state;
             this.cleanUpProductionRemnants();
@@ -2412,6 +2422,7 @@ class DataService {
     );
 
     this.saveState();
+    this.pushStateToCloud().catch(err => console.warn('Falha no push imediato pós reconciliação:', err));
 
     if (this.state.backupConfig?.enabled && this.state.backupConfig?.autoBackupOnInventoryReconcile) {
       try {
@@ -2426,6 +2437,75 @@ class DataService {
       }
     }
 
+    return audit;
+  }
+
+  // --- REPLICATE INVENTORY TO ANOTHER BRANCH ---
+  public replicateInventoryToBranch(
+    auditId: string,
+    targetBranch: Branch,
+    currentUser: User
+  ): InventoryAudit {
+    if (currentUser.role === 'Visitante') {
+      throw new Error('Perfil Visitante não pode replicar inventário.');
+    }
+
+    const audit = this.state.inventories.find(i => i.id === auditId);
+    if (!audit) throw new Error('Inventário não encontrado.');
+
+    // Apply the counted physical quantities to the target branch
+    for (const item of audit.items) {
+      const p = this.state.products.find(x => x.id === item.productId || x.code === item.productCode || x.code === item.productId);
+      if (p) {
+        if (!p.stockByBranch) p.stockByBranch = {} as any;
+        p.stockByBranch[targetBranch] = item.countedQuantity;
+        if ('GLOBAL' in p.stockByBranch) {
+          delete (p.stockByBranch as any)['GLOBAL'];
+        }
+        p.updatedAt = new Date().toISOString();
+
+        if (item.countedQuantity > 0) {
+          const mov: Movement = {
+            id: `mov-inv-rep-${Date.now()}-${item.productId}-${Math.floor(Math.random() * 1000)}`,
+            type: 'AJUSTE',
+            productId: p.id,
+            productCode: p.code,
+            productName: p.name,
+            quantity: item.countedQuantity,
+            unitPrice: p.unitPrice,
+            totalPrice: item.countedQuantity * p.unitPrice,
+            branch: targetBranch,
+            requestedBy: currentUser.name,
+            responsibleUser: currentUser.name,
+            documentNumber: `${audit.code}-REP-${targetBranch}`,
+            notes: `Saldos do Inventário ${audit.code} replicados para a unidade ${targetBranch}.`,
+            date: new Date().toISOString()
+          };
+          this.state.movements.unshift(mov);
+        }
+      }
+    }
+
+    this.logAudit(
+      currentUser,
+      'INVENTARIAR',
+      'Inventário',
+      `Saldos apurados no inventário ${audit.code} aplicados também na unidade ${targetBranch}.`,
+      null,
+      null,
+      targetBranch
+    );
+
+    this.notify(
+      'Saldos de Inventário Replicados',
+      `Os saldos apurados no inventário ${audit.code} foram replicados com sucesso na Unidade ${targetBranch}.`,
+      'SUCCESS',
+      targetBranch,
+      'Inventario'
+    );
+
+    this.saveState();
+    this.pushStateToCloud().catch(err => console.warn('Falha no push pós replicação:', err));
     return audit;
   }
 
