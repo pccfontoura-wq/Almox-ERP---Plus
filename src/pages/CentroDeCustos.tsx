@@ -8,7 +8,7 @@ import {
   Calculator, Plus, ShoppingBag, Truck, Package, HelpCircle, Eye,
   BarChart3, Scale, Layers, CheckCircle2, AlertTriangle, ArrowUpRight,
   TrendingDown, TrendingUp, Info, DollarSign, ArrowRightLeft, ShieldCheck, Sliders,
-  RotateCcw
+  RotateCcw, Trash2
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -209,22 +209,67 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
     },
     {
       id: 'actions',
-      label: 'Comparativo',
+      label: 'Ações',
       accessor: (c) => c.costCenter.id,
       exportable: false,
       render: (c) => (
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<Scale className="w-3.5 h-3.5" />}
-          onClick={() => handleOpenDetail(c.costCenter.id)}
-          className="text-xs font-bold py-1 px-2.5 rounded-lg border-blue-300 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
-        >
-          Extrato
-        </Button>
+        <Box className="flex items-center gap-1.5">
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<Scale className="w-3.5 h-3.5" />}
+            onClick={() => handleOpenDetail(c.costCenter.id)}
+            className="text-xs font-bold py-1 px-2.5 rounded-lg border-blue-300 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
+          >
+            Extrato
+          </Button>
+          {currentUser?.role === 'Master' && (
+            <Tooltip title="Excluir Centro de Custo">
+              <IconButton
+                size="small"
+                color="error"
+                onClick={() => handleDeleteCC(c.costCenter.id, c.costCenter.name)}
+                className="p-1 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600"
+              >
+                <Trash2 className="w-4 h-4" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
       )
     }
   ];
+
+  const handleDeleteCC = (id: string, name: string) => {
+    if (!currentUser) return;
+    if (!window.confirm(`Deseja realmente excluir o centro de custo "${name}"?`)) return;
+    try {
+      dataService.deleteCostCenter(id, currentUser);
+      refreshData();
+      setActionSuccess(`Centro de custo "${name}" excluído com sucesso.`);
+      setTimeout(() => setActionSuccess(null), 4000);
+    } catch (err: any) {
+      setFormError(err.message || 'Erro ao excluir centro de custo.');
+    }
+  };
+
+  const handleClearAllCostCenters = () => {
+    if (!currentUser) return;
+    if (currentUser.role !== 'Master') {
+      alert('Apenas usuários com perfil Master podem zerar todos os centros de custo.');
+      return;
+    }
+    if (window.confirm('ATENÇÃO: Deseja realmente excluir TODOS os centros de custo cadastrados (Zero Absoluto)? Não restará nenhum centro de custo no banco de dados, deixando o sistema 100% limpo para cadastramento do zero.')) {
+      try {
+        dataService.clearAllCostCenters(currentUser);
+        refreshData();
+        setActionSuccess('Todos os centros de custo foram excluídos com sucesso. Base em Zero Absoluto.');
+        setTimeout(() => setActionSuccess(null), 5000);
+      } catch (err: any) {
+        setFormError(err.message || 'Erro ao zerar centros de custo.');
+      }
+    }
+  };
 
   const handleSaveCC = (e: React.FormEvent) => {
     e.preventDefault();
@@ -241,16 +286,11 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
         active: true
       };
 
-      const existingIndex = state.costCenters.findIndex(c => c.id === cc.id);
-      if (existingIndex !== -1) {
-        state.costCenters[existingIndex] = cc;
-      } else {
-        state.costCenters.unshift(cc);
-      }
-
-      dataService.logAudit(currentUser, 'CRIAR', 'Centro de Custos', `Centro de custos ${cc.code} salvo.`, null, JSON.stringify(cc), cc.branch);
+      dataService.saveCostCenter(cc, currentUser);
       setCcModalOpen(false);
       refreshData();
+      setActionSuccess(`Centro de custo ${cc.code} salvo com sucesso.`);
+      setTimeout(() => setActionSuccess(null), 4000);
     } catch (e: any) {
       setFormError(e.message);
     }
@@ -476,7 +516,17 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
                   }}
                   className="font-bold text-xs capitalize text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700"
                 >
-                  Zerar Orçamentos (Produção)
+                  Zerar Orçamentos
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  startIcon={<Trash2 className="w-4 h-4 text-rose-600" />}
+                  onClick={handleClearAllCostCenters}
+                  className="font-bold text-xs capitalize text-rose-700 dark:text-rose-400 border-rose-300 dark:border-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                >
+                  Excluir Todos (Zero Absoluto)
                 </Button>
               </>
             )}

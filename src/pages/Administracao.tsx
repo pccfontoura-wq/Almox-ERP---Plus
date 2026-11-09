@@ -1642,11 +1642,11 @@ export const Administracao: React.FC = () => {
                     />
                   </div>
                   <Typography variant="body2" className="text-slate-600 dark:text-slate-300 text-xs leading-relaxed">
-                    Zera completamente os produtos e a operação, deixando o banco pronto para cadastramento do zero.
+                    Zera completamente os produtos, centros de custos e toda a operação, deixando o banco 100% limpo para cadastramento do zero (sem itens e sem centros de custo cadastrados).
                   </Typography>
                   <div className="pt-1 space-y-1 text-[11px] text-slate-500 dark:text-slate-400">
                     <div className="text-emerald-600 dark:text-emerald-400 font-semibold">✅ Mantém: Apenas Administrador Master e as 4 Unidades Operacionais.</div>
-                    <div className="text-rose-600 dark:text-rose-400 font-semibold">🧹 Zera: Todo o catálogo de produtos e todos os registros de teste.</div>
+                    <div className="text-rose-600 dark:text-rose-400 font-semibold">🧹 Zera: Todo o catálogo de produtos, centros de custos e todos os registros de teste (Zero Absoluto).</div>
                   </div>
                 </div>
               </div>

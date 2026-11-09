@@ -489,7 +489,7 @@ class DataService {
       this.state.auditLogs = [prodAuditLog];
 
     } else {
-      // FACTORY_RESET (Limpeza Completa)
+      // FACTORY_RESET (Limpeza Completa / Zero Absoluto)
       this.state.products = [];
       this.state.movements = [];
       this.state.transfers = [];
@@ -499,7 +499,7 @@ class DataService {
       this.state.inventories = [];
       this.state.assets = [];
       this.state.notifications = [];
-      this.state.costCenters = this.state.costCenters.map(cc => ({ ...cc, budget: 0, spent: 0 }));
+      this.state.costCenters = []; // Zero Absoluto: Nenhum centro de custo cadastrado!
       this.state.users = cleanUsers.length > 0 ? cleanUsers : [currentUser];
 
       const prodAuditLog: AuditLog = {
@@ -510,11 +510,11 @@ class DataService {
         operation: 'CRIAR',
         module: 'Governança & Produção',
         previousValue: 'Ambiente de Testes',
-        newValue: 'Ambiente de Produção (Limpeza de Fábrica Total)',
+        newValue: 'Ambiente de Produção (Limpeza de Fábrica Total - Zero Absoluto)',
         branch: 'GLOBAL',
         timestamp: new Date().toISOString(),
         ip: '127.0.0.1 (Painel Master)',
-        details: `Limpeza de fábrica concluída. Banco pronto para novo cadastramento do zero. Orçamentos zerados e usuários de teste purgados. Backup prévio salvo como ${backupFileName}.`
+        details: `Limpeza de fábrica (Zero Absoluto) concluída. Banco 100% limpo para novo cadastramento do zero (sem produtos, sem centros de custo e sem transações). Usuários de teste purgados. Backup prévio salvo como ${backupFileName}.`
       };
       this.state.auditLogs = [prodAuditLog];
     }
@@ -631,8 +631,18 @@ class DataService {
       changed = true;
     }
 
-    // Se não há movimentações nem OCs ativas (sistema zerado para produção), zera tetos orçamentários residuais
-    if (this.state.purchaseOrders.length === 0 && this.state.movements.length === 0) {
+    // Se o sistema está no Zero Absoluto (sem produtos e sem movimentações/OCs),
+    // purga centros de custo fictícios de demonstração remanescentes para garantir base 100% limpa
+    if (this.state.products.length === 0 && this.state.purchaseOrders.length === 0 && this.state.movements.length === 0) {
+      if (this.state.costCenters && this.state.costCenters.length > 0) {
+        const isRemnantSeed = this.state.costCenters.every(cc => cc.id.startsWith('cc-') || (cc.budget === 0 && cc.spent === 0));
+        if (isRemnantSeed) {
+          this.state.costCenters = [];
+          changed = true;
+        }
+      }
+    } else if (this.state.purchaseOrders.length === 0 && this.state.movements.length === 0) {
+      // Se não há movimentações nem OCs ativas, zera tetos orçamentários residuais
       const hasResidualBudgets = this.state.costCenters.some(cc => cc.budget > 0 || cc.spent > 0);
       if (hasResidualBudgets) {
         this.state.costCenters = this.state.costCenters.map(cc => ({
@@ -649,6 +659,71 @@ class DataService {
       this.pushStateToCloud();
       this.notifyListeners();
     }
+  }
+
+  public saveCostCenter(cc: CostCenter, currentUser: User): CostCenter {
+    if (currentUser.role === 'Visitante') {
+      throw new Error('Perfil Visitante não pode cadastrar ou alterar centros de custo.');
+    }
+    const existingIndex = this.state.costCenters.findIndex(c => c.id === cc.id);
+    if (existingIndex !== -1) {
+      const prev = this.state.costCenters[existingIndex];
+      this.state.costCenters[existingIndex] = { ...cc };
+      this.logAudit(currentUser, 'EDITAR', 'Centros de Custo', `Centro de custo ${cc.code} (${cc.name}) atualizado.`, JSON.stringify(prev), JSON.stringify(cc), cc.branch);
+    } else {
+      this.state.costCenters.unshift({ ...cc });
+      this.logAudit(currentUser, 'CRIAR', 'Centros de Custo', `Novo centro de custo ${cc.code} (${cc.name}) cadastrado na unidade ${cc.branch}.`, null, JSON.stringify(cc), cc.branch);
+    }
+
+    this.saveState();
+    this.pushStateToCloud();
+    this.notifyListeners();
+    return cc;
+  }
+
+  public deleteCostCenter(id: string, currentUser: User): void {
+    if (currentUser.role === 'Visitante') {
+      throw new Error('Perfil Visitante não pode excluir centros de custo.');
+    }
+    const idx = this.state.costCenters.findIndex(c => c.id === id);
+    if (idx === -1) throw new Error('Centro de custo não encontrado.');
+    const deleted = this.state.costCenters.splice(idx, 1)[0];
+
+    this.logAudit(
+      currentUser,
+      'EXCLUIR',
+      'Centros de Custo',
+      `Centro de custo ${deleted.code} (${deleted.name}) excluído da unidade ${deleted.branch}.`,
+      JSON.stringify(deleted),
+      null,
+      deleted.branch
+    );
+
+    this.saveState();
+    this.pushStateToCloud();
+    this.notifyListeners();
+  }
+
+  public clearAllCostCenters(currentUser: User): void {
+    if (currentUser.role !== 'Master') {
+      throw new Error('Apenas Administrador Master pode excluir todos os centros de custo.');
+    }
+    const count = this.state.costCenters.length;
+    this.state.costCenters = [];
+
+    this.logAudit(
+      currentUser,
+      'EXCLUIR',
+      'Centros de Custo',
+      `Todos os centros de custo (${count} registros) foram excluídos para início em Zero Absoluto.`,
+      `${count} centros de custo`,
+      '0 centros de custo',
+      'GLOBAL'
+    );
+
+    this.saveState();
+    this.pushStateToCloud();
+    this.notifyListeners();
   }
 
   public getState(): AppState {
