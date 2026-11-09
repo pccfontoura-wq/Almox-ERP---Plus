@@ -24,7 +24,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, open 
     ((state.purchaseOrders || []).filter(po => po.status === 'AGUARDANDO_APROVACAO').length);
   const inTransitTransfersCount = state.transfers.filter(t => t.status === 'EM_TRANSITO').length;
 
-  const menuItems = [
+  interface MenuItem {
+    id: string;
+    label: string;
+    icon: any;
+    badge?: string | null;
+    isNew?: boolean;
+    allowedRoles?: UserRole[];
+  }
+
+  const menuItems: MenuItem[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'almoxarifado', label: 'Almoxarifado', icon: Package, badge: pendingInternalReqsCount > 0 ? `${pendingInternalReqsCount} reqs` : (inTransitTransfersCount > 0 ? `${inTransitTransfersCount} trânsito` : null) },
     { id: 'compras', label: 'Compras', icon: ShoppingCart, badge: pendingPurchaseCount > 0 ? `${pendingPurchaseCount} pendentes` : null },

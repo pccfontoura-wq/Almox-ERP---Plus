@@ -1522,7 +1522,7 @@ export function exportInventoryReconciliationPDF(
   renderKPIBox(leftMargin, 'Itens Auditados', `${totalItems} produtos`, `${audit.category || 'Todas as categorias'}`, [255, 255, 255], [30, 41, 59]);
   renderKPIBox(leftMargin + kpiBoxWidth + 4, 'Acuracidade Física', `${accuracyPct}%`, `${exactItems} itens com saldo exato`, [240, 253, 244], [22, 101, 52]);
   renderKPIBox(leftMargin + (kpiBoxWidth * 2) + 8, 'Divergências', `${divergentItems} itens`, `+${surplusCount} sobras / -${lackCount} faltas`, [254, 242, 242], [153, 27, 27]);
-  renderKPIBox(leftMargin + (kpiBoxWidth * 3) + 12, 'Impacto Financeiro', `R$ ${audit.totalDivergenceValue.toFixed(2)}`, `Ajuste contábil total`, [239, 246, 255], [29, 78, 216]);
+  renderKPIBox(leftMargin + (kpiBoxWidth * 3) + 12, 'Impacto Financeiro', `R$ ${(audit.totalDivergenceValue || 0).toFixed(2)}`, `Ajuste contábil total`, [239, 246, 255], [29, 78, 216]);
 
   curY += 16;
 

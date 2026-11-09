@@ -2149,11 +2149,11 @@ class DataService {
     let totalDivVal = 0;
 
     audit.items = audit.items.map(item => {
-      const match = countedItems.find(c => c.productId === item.productId);
+      const match = countedItems.find(c => c.productId === item.productId || c.productId === item.productCode);
       if (match) {
-        const counted = match.countedQuantity;
+        const counted = Number(match.countedQuantity) >= 0 ? Number(match.countedQuantity) : 0;
         const div = counted - item.systemQuantity;
-        const p = this.state.products.find(x => x.id === item.productId);
+        const p = this.state.products.find(x => x.id === item.productId || x.code === item.productCode || x.code === item.productId);
         const uPrice = p ? p.unitPrice : 0;
         const divVal = div * uPrice;
 
@@ -2165,7 +2165,7 @@ class DataService {
           countedQuantity: counted,
           divergence: div,
           divergenceValue: divVal,
-          notes: match.notes
+          notes: match.notes !== undefined ? match.notes : item.notes
         };
       }
       return item;
@@ -2178,7 +2178,46 @@ class DataService {
     return audit;
   }
 
-  public reconcileInventory(auditId: string, currentUser: User): InventoryAudit {
+  public reopenInventory(auditId: string, currentUser: User): InventoryAudit {
+    if (currentUser.role === 'Visitante') {
+      throw new Error('Perfil Visitante não pode reabrir inventário.');
+    }
+
+    const audit = this.state.inventories.find(i => i.id === auditId);
+    if (!audit) throw new Error('Inventário não encontrado.');
+
+    audit.status = 'EM_ANDAMENTO';
+    audit.reconciledAt = undefined;
+    audit.reconciledBy = undefined;
+    audit.finishedAt = undefined;
+
+    this.logAudit(
+      currentUser,
+      'EDITAR',
+      'Inventário',
+      `Inventário ${audit.code} (${audit.title}) reaberto para recontagem física e ajuste de saldos na unidade ${audit.branch}.`,
+      null,
+      null,
+      audit.branch
+    );
+
+    this.notify(
+      'Inventário Reaberto para Correção',
+      `O inventário ${audit.code} foi reaberto por ${currentUser.name} para revisão de contagens.`,
+      'INFO',
+      audit.branch,
+      'Inventario'
+    );
+
+    this.saveState();
+    return audit;
+  }
+
+  public reconcileInventory(
+    auditId: string,
+    currentUser: User,
+    countedItems?: { productId: string; countedQuantity: number; notes?: string }[]
+  ): InventoryAudit {
     if (currentUser.role === 'Visitante') {
       throw new Error('Perfil Visitante não pode reconciliar inventário.');
     }
@@ -2186,21 +2225,75 @@ class DataService {
     const audit = this.state.inventories.find(i => i.id === auditId);
     if (!audit) throw new Error('Inventário não encontrado.');
 
-    if (audit.status === 'CONCLUIDO') {
-      throw new Error('Este inventário já foi concluído e reconciliado.');
+    // 1. If explicit countedItems are passed, update and commit counts to audit.items immediately
+    if (countedItems && countedItems.length > 0) {
+      let totalDivCount = 0;
+      let totalDivVal = 0;
+
+      audit.items = audit.items.map(item => {
+        const match = countedItems.find(c => c.productId === item.productId || c.productId === item.productCode);
+        const counted = match !== undefined
+          ? (Number(match.countedQuantity) >= 0 ? Number(match.countedQuantity) : 0)
+          : item.countedQuantity;
+        const div = counted - item.systemQuantity;
+        const p = this.state.products.find(x => x.id === item.productId || x.code === item.productCode || x.code === item.productId);
+        const uPrice = p ? p.unitPrice : 0;
+        const divVal = div * uPrice;
+
+        if (div !== 0) totalDivCount++;
+        totalDivVal += divVal;
+
+        return {
+          ...item,
+          countedQuantity: counted,
+          divergence: div,
+          divergenceValue: divVal,
+          notes: match?.notes !== undefined ? match.notes : item.notes
+        };
+      });
+
+      audit.totalDivergenceCount = totalDivCount;
+      audit.totalDivergenceValue = totalDivVal;
+    } else {
+      // Re-verify divergence calculations for items already in audit
+      let totalDivCount = 0;
+      let totalDivVal = 0;
+      audit.items = audit.items.map(item => {
+        const div = item.countedQuantity - item.systemQuantity;
+        const p = this.state.products.find(x => x.id === item.productId || x.code === item.productCode || x.code === item.productId);
+        const uPrice = p ? p.unitPrice : 0;
+        const divVal = div * uPrice;
+        if (div !== 0) totalDivCount++;
+        totalDivVal += divVal;
+        return {
+          ...item,
+          divergence: div,
+          divergenceValue: divVal
+        };
+      });
+      audit.totalDivergenceCount = totalDivCount;
+      audit.totalDivergenceValue = totalDivVal;
     }
 
-    // Apply adjustments to stock
-    for (const item of audit.items) {
-      if (item.divergence !== 0) {
-        const p = this.state.products.find(x => x.id === item.productId);
-        if (p) {
-          p.stockByBranch[audit.branch] = item.countedQuantity;
-          p.updatedAt = new Date().toISOString();
+    const branchKey = (audit.branch === 'GLOBAL' ? 'SP' : audit.branch) as Branch;
 
-          // Log adjustment movement
+    // 2. Apply adjustments to stock for ALL audited items in the target branch
+    for (const item of audit.items) {
+      const p = this.state.products.find(x => x.id === item.productId || x.code === item.productCode || x.code === item.productId);
+      if (p) {
+        if (!p.stockByBranch) p.stockByBranch = {} as any;
+        
+        // Unconditionally set the real physical stock on the audited branch
+        p.stockByBranch[branchKey] = item.countedQuantity;
+        if ('GLOBAL' in p.stockByBranch) {
+          delete (p.stockByBranch as any)['GLOBAL'];
+        }
+        p.updatedAt = new Date().toISOString();
+
+        // Log adjustment movement if there is a divergence between system and counted physical stock
+        if (item.divergence !== 0) {
           const mov: Movement = {
-            id: `mov-inv-${Date.now()}-${item.productId}`,
+            id: `mov-inv-${Date.now()}-${item.productId}-${Math.floor(Math.random() * 1000)}`,
             type: 'AJUSTE',
             productId: p.id,
             productCode: p.code,
@@ -2208,11 +2301,11 @@ class DataService {
             quantity: Math.abs(item.divergence),
             unitPrice: p.unitPrice,
             totalPrice: Math.abs(item.divergence) * p.unitPrice,
-            branch: audit.branch,
+            branch: branchKey,
             requestedBy: currentUser.name,
             responsibleUser: currentUser.name,
             documentNumber: audit.code,
-            notes: `Ajuste de inventário físico. Divergência de ${item.divergence > 0 ? '+' : ''}${item.divergence} ${item.unit}.`,
+            notes: `Ajuste de inventário físico (${audit.title}). ${item.divergence > 0 ? 'Sobra/Entrada' : 'Falta/Perda'} de ${item.divergence > 0 ? '+' : ''}${item.divergence} ${item.unit || p.unit}.`,
             date: new Date().toISOString()
           };
           this.state.movements.unshift(mov);
@@ -2225,7 +2318,24 @@ class DataService {
     audit.reconciledAt = new Date().toISOString();
     audit.reconciledBy = currentUser.name;
 
-    this.logAudit(currentUser, 'INVENTARIAR', 'Inventário', `Reconciliação do inventário ${audit.code} finalizada. Estoque atualizado.`, null, null, audit.branch);
+    this.logAudit(
+      currentUser,
+      'INVENTARIAR',
+      'Inventário',
+      `Reconciliação do inventário ${audit.code} finalizada na unidade ${branchKey}. ${audit.items.length} itens conferidos e saldos de estoque aplicados.`,
+      null,
+      null,
+      branchKey
+    );
+
+    this.notify(
+      'Inventário Reconciliado com Sucesso',
+      `O inventário ${audit.code} (${audit.title}) foi reconciliado por ${currentUser.name}. Estoque atualizado para ${audit.items.length} itens na unidade ${branchKey}.`,
+      'SUCCESS',
+      branchKey,
+      'Inventario'
+    );
+
     this.saveState();
 
     if (this.state.backupConfig?.enabled && this.state.backupConfig?.autoBackupOnInventoryReconcile) {
@@ -2234,7 +2344,7 @@ class DataService {
           'INVENTARIO_E_COMPRAS',
           'GATILHO_OPERACIONAL',
           currentUser,
-          `Backup automático de segurança pós-reconciliação do Inventário Físico ${audit.code} (${audit.branch})`
+          `Backup automático de segurança pós-reconciliação do Inventário Físico ${audit.code} (${branchKey})`
         );
       } catch (e) {
         console.error('Erro ao gerar snapshot pós-inventário:', e);

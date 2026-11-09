@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import {
   ClipboardCheck, Plus, CheckCircle2, AlertTriangle, RefreshCw, FileDown,
-  Printer, FileText, Filter, Search, Award, TrendingUp, CheckCircle, Clock
+  Printer, FileText, Filter, Search, Award, TrendingUp, CheckCircle, Clock, RotateCcw
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -266,21 +266,41 @@ export const Inventario: React.FC = () => {
           </Button>
 
           {i.status === 'CONCLUIDO' && (
-            <Tooltip title="Baixar Laudo Técnico Oficial de Reconciliação (PDF)">
-              <Button
-                size="small"
-                variant="outlined"
-                color="success"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  exportInventoryReconciliationPDF(i, state.products);
-                }}
-                startIcon={<FileDown className="w-3.5 h-3.5 text-emerald-600" />}
-                className="text-xs py-1 px-2 font-medium border-emerald-300 text-emerald-700 dark:text-emerald-400 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
-              >
-                Laudo PDF
-              </Button>
-            </Tooltip>
+            <>
+              <Tooltip title="Baixar Laudo Técnico Oficial de Reconciliação (PDF)">
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="success"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    exportInventoryReconciliationPDF(i, state.products);
+                  }}
+                  startIcon={<FileDown className="w-3.5 h-3.5 text-emerald-600" />}
+                  className="text-xs py-1 px-2 font-medium border-emerald-300 text-emerald-700 dark:text-emerald-400 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                >
+                  Laudo PDF
+                </Button>
+              </Tooltip>
+
+              {canEdit && (
+                <Tooltip title="Reabrir campanha para corrigir contagens e reconciliar novamente">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="warning"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleReopenAudit(i);
+                    }}
+                    startIcon={<RotateCcw className="w-3.5 h-3.5 text-amber-600" />}
+                    className="text-xs py-1 px-2 font-medium border-amber-300 text-amber-700 dark:text-amber-400 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                  >
+                    Reabrir
+                  </Button>
+                </Tooltip>
+              )}
+            </>
           )}
 
           <Tooltip title="Baixar Folha de Contagem Cega (PDF) para conferência física">
@@ -348,13 +368,22 @@ export const Inventario: React.FC = () => {
 
   const handleSaveCounts = () => {
     if (!activeAudit || !currentUser) return;
-    const formatted = Object.entries(counts).map(([productId, countedQuantity]) => ({
-      productId,
-      countedQuantity: Number(countedQuantity)
-    }));
+    const formatted = activeAudit.items.map(item => {
+      const raw = counts[item.productId];
+      const val = (raw !== undefined && raw !== ('' as any)) ? Number(raw) : item.countedQuantity;
+      return {
+        productId: item.productId,
+        countedQuantity: Number.isFinite(val) && val >= 0 ? val : 0
+      };
+    });
 
     const updated = dataService.updateInventoryCount(activeAudit.id, formatted, currentUser);
     setActiveAudit(updated);
+    const updatedCounts: Record<string, number> = {};
+    updated.items.forEach(it => {
+      updatedCounts[it.productId] = it.countedQuantity;
+    });
+    setCounts(updatedCounts);
     refreshData();
     alert('Contagem de inventário salva com sucesso como rascunho!');
   };
@@ -364,10 +393,45 @@ export const Inventario: React.FC = () => {
     if (!confirm('Deseja reconciliar o estoque agora? Isso ajustará automaticamente a quantidade de todos os produtos no banco com base na contagem apurada e marcará o inventário como Concluído.')) return;
 
     try {
-      const reconciled = dataService.reconcileInventory(activeAudit.id, currentUser);
+      const formattedCounts = activeAudit.items.map(item => {
+        const raw = counts[item.productId];
+        const val = (raw !== undefined && raw !== ('' as any)) ? Number(raw) : item.countedQuantity;
+        return {
+          productId: item.productId,
+          countedQuantity: Number.isFinite(val) && val >= 0 ? val : 0
+        };
+      });
+
+      const reconciled = dataService.reconcileInventory(activeAudit.id, currentUser, formattedCounts);
       setActiveAudit(reconciled);
+
+      const updatedCounts: Record<string, number> = {};
+      reconciled.items.forEach(it => {
+        updatedCounts[it.productId] = it.countedQuantity;
+      });
+      setCounts(updatedCounts);
+
       refreshData();
-      alert('Inventário reconciliado com sucesso! Saldos de estoque atualizados no ERP.');
+      alert(`Inventário ${reconciled.code} reconciliado com sucesso! Saldos de estoque atualizados na unidade ${reconciled.branch} e laudo emitido.`);
+    } catch (e: any) {
+      alert(e.message);
+    }
+  };
+
+  const handleReopenAudit = (audit: InventoryAudit) => {
+    if (!currentUser) return;
+    if (!confirm(`Deseja reabrir a campanha "${audit.title}" (${audit.code}) para correção ou recontagem? Os campos de quantidade ficarão editáveis novamente para você ajustar os saldos reais.`)) return;
+
+    try {
+      const reopened = dataService.reopenInventory(audit.id, currentUser);
+      setActiveAudit(reopened);
+      const initialCounts: Record<string, number> = {};
+      reopened.items.forEach(item => {
+        initialCounts[item.productId] = item.countedQuantity;
+      });
+      setCounts(initialCounts);
+      refreshData();
+      alert(`Inventário ${reopened.code} reaberto com sucesso. Você já pode ajustar as quantidades.`);
     } catch (e: any) {
       alert(e.message);
     }
@@ -382,7 +446,10 @@ export const Inventario: React.FC = () => {
     const exportData = activeAudit.items.map(item => {
       const prod = prodMap.get(item.productId);
       const uPrice = prod?.unitPrice || 0;
-      const divVal = item.divergenceValue ?? (item.divergence * uPrice);
+      const raw = counts[item.productId];
+      const currentCounted = (raw !== undefined && raw !== ('' as any)) ? Number(raw) : item.countedQuantity;
+      const divergence = currentCounted - item.systemQuantity;
+      const divVal = divergence * uPrice;
 
       return {
         'Código Auditoria': activeAudit.code,
@@ -395,11 +462,11 @@ export const Inventario: React.FC = () => {
         'UN': item.unit || prod?.unit || 'UN',
         'Localização': prod?.locationSlot || 'ALMOX-GERAL',
         'Qtd Sistema': item.systemQuantity,
-        'Qtd Contada': item.countedQuantity,
-        'Divergência': item.divergence,
+        'Qtd Contada': currentCounted,
+        'Divergência': divergence,
         'Preço Unitário (R$)': uPrice,
         'Divergência Financeira (R$)': divVal,
-        'Status': item.divergence === 0 ? 'Conforme (Exato)' : item.divergence > 0 ? 'Sobra' : 'Falta'
+        'Status': divergence === 0 ? 'Conforme (Exato)' : divergence > 0 ? 'Sobra' : 'Falta'
       };
     });
 
@@ -410,18 +477,36 @@ export const Inventario: React.FC = () => {
   const modalStats = useMemo(() => {
     if (!activeAudit) return null;
     const total = activeAudit.items.length;
-    const exact = activeAudit.items.filter(i => (counts[i.productId] ?? i.countedQuantity) === i.systemQuantity).length;
+    let exact = 0;
+    let liveTotalDivVal = 0;
+
+    const prodMap = new Map<string, any>();
+    state.products.forEach(p => prodMap.set(p.id, p));
+
+    activeAudit.items.forEach(i => {
+      const raw = counts[i.productId];
+      const currentCounted = (raw !== undefined && raw !== ('' as any)) ? Number(raw) : i.countedQuantity;
+      const div = currentCounted - i.systemQuantity;
+      if (div === 0) {
+        exact++;
+      }
+      const prod = prodMap.get(i.productId);
+      const uPrice = prod ? prod.unitPrice : 0;
+      liveTotalDivVal += (div * uPrice);
+    });
+
     const divergent = total - exact;
     const accuracy = total > 0 ? ((exact / total) * 100).toFixed(1) : '100.0';
 
-    return { total, exact, divergent, accuracy };
-  }, [activeAudit, counts]);
+    return { total, exact, divergent, accuracy, liveTotalDivVal };
+  }, [activeAudit, counts, state.products]);
 
   // Modal filtered items
   const modalFilteredItems = useMemo(() => {
     if (!activeAudit) return [];
     return activeAudit.items.filter(item => {
-      const currentCounted = counts[item.productId] ?? item.countedQuantity;
+      const raw = counts[item.productId];
+      const currentCounted = (raw !== undefined && raw !== ('' as any)) ? Number(raw) : item.countedQuantity;
       const isDivergent = currentCounted !== item.systemQuantity;
 
       if (onlyDivergentInModal && !isDivergent) return false;
@@ -725,7 +810,7 @@ export const Inventario: React.FC = () => {
                     Ajuste Financeiro Total
                   </Typography>
                   <Typography variant="h6" className="font-extrabold text-blue-700 dark:text-blue-400 text-lg font-mono">
-                    R$ {(activeAudit.totalDivergenceValue || 0).toFixed(2)}
+                    R$ {(modalStats?.liveTotalDivVal ?? activeAudit.totalDivergenceValue ?? 0).toFixed(2)}
                   </Typography>
                   <Typography variant="caption" className="text-blue-600 block text-[10px]">
                     Impacto contábil apurado
@@ -795,9 +880,10 @@ export const Inventario: React.FC = () => {
                   </TableRow>
                 ) : (
                   modalFilteredItems.map((item) => {
-                    const currentCounted = counts[item.productId] ?? item.countedQuantity;
+                    const raw = counts[item.productId];
+                    const currentCounted = (raw !== undefined && raw !== ('' as any)) ? Number(raw) : item.countedQuantity;
                     const div = currentCounted - item.systemQuantity;
-                    const prod = state.products.find(p => p.id === item.productId);
+                    const prod = state.products.find(p => p.id === item.productId || p.code === item.productCode);
                     return (
                       <TableRow
                         key={item.productId}
@@ -826,8 +912,14 @@ export const Inventario: React.FC = () => {
                               type="number"
                               size="small"
                               className="w-24"
-                              value={currentCounted}
-                              onChange={(e) => setCounts({ ...counts, [item.productId]: Number(e.target.value) })}
+                              value={counts[item.productId] !== undefined ? counts[item.productId] : item.countedQuantity}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setCounts(prev => ({
+                                  ...prev,
+                                  [item.productId]: val === '' ? ('' as any) : Number(val)
+                                }));
+                              }}
                               slotProps={{
                                 htmlInput: { min: 0 }
                               }}
@@ -856,15 +948,28 @@ export const Inventario: React.FC = () => {
 
             <Box className="flex items-center gap-2">
               {activeAudit.status === 'CONCLUIDO' ? (
-                <Button
-                  variant="contained"
-                  color="success"
-                  startIcon={<FileDown className="w-4 h-4" />}
-                  onClick={() => exportInventoryReconciliationPDF(activeAudit, state.products)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
-                >
-                  Baixar Laudo de Reconciliação (PDF)
-                </Button>
+                <>
+                  {canEdit && (
+                    <Button
+                      variant="outlined"
+                      color="warning"
+                      startIcon={<RotateCcw className="w-4 h-4 text-amber-600" />}
+                      onClick={() => handleReopenAudit(activeAudit)}
+                      className="border-amber-400 text-amber-700 dark:text-amber-300 hover:bg-amber-50 text-xs font-bold"
+                    >
+                      Reabrir para Correção / Recontagem
+                    </Button>
+                  )}
+                  <Button
+                    variant="contained"
+                    color="success"
+                    startIcon={<FileDown className="w-4 h-4" />}
+                    onClick={() => exportInventoryReconciliationPDF(activeAudit, state.products)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
+                  >
+                    Baixar Laudo de Reconciliação (PDF)
+                  </Button>
+                </>
               ) : (
                 canEdit && (
                   <>
