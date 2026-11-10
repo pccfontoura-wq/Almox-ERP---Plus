@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
   Box, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, MenuItem, Select, FormControl, InputLabel, Alert, Chip, Card, CardContent,
-  Table, TableBody, TableCell, TableHead, TableRow, Tabs, Tab, Tooltip, IconButton
+  Table, TableBody, TableCell, TableHead, TableRow, Tabs, Tab, Tooltip, IconButton, Snackbar
 } from '@mui/material';
 import {
   ClipboardCheck, Plus, CheckCircle2, AlertTriangle, RefreshCw, FileDown,
@@ -36,6 +36,12 @@ export const Inventario: React.FC = () => {
   // Replication dialog states
   const [replicateModalAudit, setReplicateModalAudit] = useState<InventoryAudit | null>(null);
   const [targetReplicateBranch, setTargetReplicateBranch] = useState<Branch>('SP');
+
+  // Reconciliation Confirmation & Success Dialog states
+  const [confirmReconcileOpen, setConfirmReconcileOpen] = useState(false);
+  const [reconcileSuccessAudit, setReconcileSuccessAudit] = useState<InventoryAudit | null>(null);
+  const [reopenConfirmAudit, setReopenConfirmAudit] = useState<InventoryAudit | null>(null);
+  const [snackMessage, setSnackMessage] = useState<{ text: string; severity: 'success' | 'info' | 'warning' | 'error' } | null>(null);
 
   // Creation form states
   const [title, setTitle] = useState('');
@@ -382,7 +388,10 @@ export const Inventario: React.FC = () => {
     });
 
     if (filteredProducts.length === 0) {
-      alert(`Nenhum produto ativo encontrado para a categoria "${targetCategory}" na unidade ${targetBranch}.`);
+      setSnackMessage({
+        text: `Nenhum produto ativo encontrado para a categoria "${targetCategory}" na unidade ${targetBranch}.`,
+        severity: 'warning'
+      });
       return;
     }
 
@@ -433,12 +442,19 @@ export const Inventario: React.FC = () => {
     });
     setCounts(updatedCounts);
     refreshData();
-    alert('Contagem de inventário salva com sucesso como rascunho!');
+    setSnackMessage({
+      text: 'Contagem de inventário salva com sucesso como rascunho!',
+      severity: 'success'
+    });
   };
 
-  const handleReconcile = () => {
+  const handleOpenReconcileConfirm = () => {
     if (!activeAudit || !currentUser) return;
-    if (!confirm('Deseja reconciliar o estoque agora? Isso ajustará automaticamente a quantidade de todos os produtos no banco com base na contagem apurada e marcará o inventário como Concluído.')) return;
+    setConfirmReconcileOpen(true);
+  };
+
+  const handleConfirmReconcile = () => {
+    if (!activeAudit || !currentUser) return;
 
     try {
       const formattedCounts = activeAudit.items.map(item => {
@@ -460,24 +476,22 @@ export const Inventario: React.FC = () => {
       setCounts(updatedCounts);
 
       refreshData();
-      if (selectedBranch !== 'GLOBAL' && selectedBranch !== reconciled.branch) {
-        if (confirm(`Inventário ${reconciled.code} reconciliado com sucesso na Unidade ${reconciled.branch}!\n\nSeu sistema está visualizando atualmente a Unidade ${selectedBranch}.\nDeseja alternar a visualização para a Unidade ${reconciled.branch} agora para ver os novos saldos no Almoxarifado?`)) {
-          setSelectedBranch(reconciled.branch);
-        }
-      } else {
-        alert(`Inventário ${reconciled.code} reconciliado com sucesso! Saldos de estoque atualizados na Unidade ${reconciled.branch} e laudo emitido.`);
-      }
+      setConfirmReconcileOpen(false);
+      setReconcileSuccessAudit(reconciled);
     } catch (e: any) {
-      alert(e.message);
+      setConfirmReconcileOpen(false);
+      setSnackMessage({
+        text: e.message || 'Erro ao reconciliar inventário.',
+        severity: 'error'
+      });
     }
   };
 
-  const handleReopenAudit = (audit: InventoryAudit) => {
-    if (!currentUser) return;
-    if (!confirm(`Deseja reabrir a campanha "${audit.title}" (${audit.code}) para correção ou recontagem? Os campos de quantidade ficarão editáveis novamente para você ajustar os saldos reais.`)) return;
+  const handleConfirmReopen = () => {
+    if (!reopenConfirmAudit || !currentUser) return;
 
     try {
-      const reopened = dataService.reopenInventory(audit.id, currentUser);
+      const reopened = dataService.reopenInventory(reopenConfirmAudit.id, currentUser);
       setActiveAudit(reopened);
       const initialCounts: Record<string, number> = {};
       reopened.items.forEach(item => {
@@ -485,10 +499,23 @@ export const Inventario: React.FC = () => {
       });
       setCounts(initialCounts);
       refreshData();
-      alert(`Inventário ${reopened.code} reaberto com sucesso. Você já pode ajustar as quantidades.`);
+      setReopenConfirmAudit(null);
+      setSnackMessage({
+        text: `Inventário ${reopened.code} reaberto com sucesso. Você já pode ajustar as quantidades.`,
+        severity: 'info'
+      });
     } catch (e: any) {
-      alert(e.message);
+      setReopenConfirmAudit(null);
+      setSnackMessage({
+        text: e.message || 'Erro ao reabrir inventário.',
+        severity: 'error'
+      });
     }
+  };
+
+  const handleReopenAudit = (audit: InventoryAudit) => {
+    if (!currentUser) return;
+    setReopenConfirmAudit(audit);
   };
 
   // Helper for Exporting Audit Items to Excel
@@ -1088,7 +1115,7 @@ export const Inventario: React.FC = () => {
                     <Button
                       variant="contained"
                       color="success"
-                      onClick={handleReconcile}
+                      onClick={handleOpenReconcileConfirm}
                       className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
                       startIcon={<CheckCircle2 className="w-4 h-4" />}
                     >
@@ -1145,13 +1172,20 @@ export const Inventario: React.FC = () => {
             onClick={() => {
               if (!replicateModalAudit || !currentUser) return;
               try {
-                dataService.replicateInventoryToBranch(replicateModalAudit.id, targetReplicateBranch, currentUser);
+                const target = targetReplicateBranch;
+                dataService.replicateInventoryToBranch(replicateModalAudit.id, target, currentUser);
                 refreshData();
                 setReplicateModalAudit(null);
-                setSelectedBranch(targetReplicateBranch);
-                alert(`Saldos do inventário aplicados com sucesso na Unidade ${targetReplicateBranch}! A visão do sistema foi alternada para esta unidade.`);
+                setSelectedBranch(target);
+                setSnackMessage({
+                  text: `Saldos do inventário aplicados com sucesso na Unidade ${target}! A visão do sistema foi alternada para esta unidade.`,
+                  severity: 'success'
+                });
               } catch (err: any) {
-                alert(err.message);
+                setSnackMessage({
+                  text: err.message || 'Erro ao replicar inventário.',
+                  severity: 'error'
+                });
               }
             }}
             className="bg-blue-600 hover:bg-blue-700 font-bold text-xs"
@@ -1160,6 +1194,188 @@ export const Inventario: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* CONFIRM RECONCILIATION DIALOG */}
+      <Dialog
+        open={confirmReconcileOpen}
+        onClose={() => setConfirmReconcileOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle className="font-bold bg-slate-900 text-white flex items-center gap-2 py-3">
+          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          <span>Confirmar Homologação & Reconciliação Física</span>
+        </DialogTitle>
+        <DialogContent dividers className="space-y-4 py-4 text-xs">
+          {activeAudit && (
+            <>
+              <Typography className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                Você está prestes a reconciliar em definitivo o inventário:
+              </Typography>
+              <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500">Campanha / Código:</span>
+                  <span className="font-bold text-slate-800 dark:text-slate-100">{activeAudit.title} ({activeAudit.code})</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500">Unidade de Aplicação:</span>
+                  <span className="font-bold text-blue-700 dark:text-blue-400">Unidade {activeAudit.branch}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500">Total de Itens Auditados:</span>
+                  <span className="font-bold text-slate-800 dark:text-slate-100">{activeAudit.items.length} produtos</span>
+                </div>
+                {modalStats && (
+                  <>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500">Itens com Divergência:</span>
+                      <span className="font-bold text-rose-600">{modalStats.divergent} itens</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500">Acuracidade Física:</span>
+                      <span className="font-bold text-emerald-600">{modalStats.accuracy}%</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500">Impacto Financeiro Líquido:</span>
+                      <span className="font-bold font-mono text-blue-700 dark:text-blue-400">
+                        R$ {(modalStats?.liveTotalDivVal ?? 0).toFixed(2)}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+              <Alert severity="warning" className="text-xs rounded-xl">
+                <strong>Atenção:</strong> Ao confirmar, o saldo em estoque de todos os <strong>{activeAudit.items.length} itens</strong> será atualizado imediatamente no banco de dados da <strong>Unidade {activeAudit.branch}</strong> para corresponder à contagem apurada. Esta campanha será marcada como <strong>Concluída</strong> e o <strong>Laudo Oficial de Auditoria</strong> ficará disponível para download.
+              </Alert>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 flex justify-between">
+          <Button onClick={() => setConfirmReconcileOpen(false)} color="inherit" className="text-xs font-semibold">
+            Voltar e Revisar
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            onClick={handleConfirmReconcile}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
+            startIcon={<CheckCircle2 className="w-4 h-4" />}
+          >
+            Confirmar e Homologar Reconciliação
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* RECONCILIATION SUCCESS DIALOG */}
+      <Dialog
+        open={Boolean(reconcileSuccessAudit)}
+        onClose={() => setReconcileSuccessAudit(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle className="font-bold bg-emerald-700 text-white flex items-center gap-2 py-3">
+          <CheckCircle2 className="w-6 h-6 text-emerald-200" />
+          <span>Inventário Reconciliado com Sucesso!</span>
+        </DialogTitle>
+        <DialogContent dividers className="space-y-4 py-5 text-center">
+          <Box className="w-16 h-16 mx-auto rounded-full bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center text-emerald-600 mb-2">
+            <CheckCircle className="w-10 h-10" />
+          </Box>
+          <Typography variant="h6" className="font-bold text-slate-800 dark:text-slate-100">
+            Estoque Atualizado na Unidade {reconcileSuccessAudit?.branch}!
+          </Typography>
+          <Typography variant="body2" className="text-slate-600 dark:text-slate-300 max-w-md mx-auto">
+            A campanha <strong>{reconcileSuccessAudit?.title}</strong> ({reconcileSuccessAudit?.code}) foi concluída e homologada. O saldo de <strong>{reconcileSuccessAudit?.items.length} produtos</strong> foi ajustado no almoxarifado da filial.
+          </Typography>
+          <div className="flex flex-col sm:flex-row justify-center gap-2 pt-2">
+            <Button
+              variant="contained"
+              size="medium"
+              startIcon={<FileDown className="w-4 h-4" />}
+              onClick={() => {
+                if (reconcileSuccessAudit) {
+                  exportInventoryReconciliationPDF(reconcileSuccessAudit, state.products);
+                }
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
+            >
+              Baixar Laudo Oficial (PDF)
+            </Button>
+            <Button
+              variant="outlined"
+              size="medium"
+              startIcon={<Building2 className="w-4 h-4" />}
+              onClick={() => {
+                if (reconcileSuccessAudit) {
+                  setSelectedBranch(reconcileSuccessAudit.branch);
+                  setReconcileSuccessAudit(null);
+                  setActiveAudit(null);
+                }
+              }}
+              className="border-blue-600 text-blue-700 dark:text-blue-400 hover:bg-blue-50 font-bold text-xs"
+            >
+              Ver Estoque no Almoxarifado ({reconcileSuccessAudit?.branch})
+            </Button>
+          </div>
+        </DialogContent>
+        <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 justify-end">
+          <Button onClick={() => setReconcileSuccessAudit(null)} color="inherit" className="text-xs font-semibold">
+            Fechar
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* REOPEN CONFIRMATION DIALOG */}
+      <Dialog
+        open={Boolean(reopenConfirmAudit)}
+        onClose={() => setReopenConfirmAudit(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle className="font-bold bg-amber-700 text-white flex items-center gap-2 py-3">
+          <RotateCcw className="w-5 h-5 text-amber-200" />
+          <span>Reabrir Inventário Físico</span>
+        </DialogTitle>
+        <DialogContent dividers className="space-y-3 py-4 text-xs">
+          <Typography className="text-xs text-slate-700 dark:text-slate-200">
+            Deseja realmente reabrir a campanha <strong>{reopenConfirmAudit?.title}</strong> ({reopenConfirmAudit?.code}) para correção ou recontagem?
+          </Typography>
+          <Alert severity="info" className="text-xs rounded-xl">
+            Os campos de quantidade contada ficarão editáveis novamente para você ajustar os saldos reais e reprocessar o laudo de auditoria.
+          </Alert>
+        </DialogContent>
+        <DialogActions className="p-3 bg-slate-50 dark:bg-slate-900 flex justify-between">
+          <Button onClick={() => setReopenConfirmAudit(null)} color="inherit" className="text-xs">
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={handleConfirmReopen}
+            className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs"
+            startIcon={<RotateCcw className="w-4 h-4" />}
+          >
+            Confirmar Reabertura
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* TOAST NOTIFICATION SNACKBAR */}
+      <Snackbar
+        open={Boolean(snackMessage)}
+        autoHideDuration={4000}
+        onClose={() => setSnackMessage(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          severity={snackMessage?.severity || 'info'}
+          onClose={() => setSnackMessage(null)}
+          variant="filled"
+          sx={{ width: '100%', fontWeight: 'bold', boxShadow: 3 }}
+        >
+          {snackMessage?.text}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
