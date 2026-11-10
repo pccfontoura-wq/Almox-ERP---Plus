@@ -18,10 +18,10 @@ import { Branch } from '../types';
 export interface Column<T> {
   id: string;
   label: string;
-  accessor: (row: T) => any;
+  accessor: (row: T, currentUnit?: Branch | 'GLOBAL') => any;
   sortable?: boolean;
   align?: 'left' | 'center' | 'right';
-  render?: (row: T) => React.ReactNode;
+  render?: (row: T, currentUnit?: Branch | 'GLOBAL') => React.ReactNode;
   exportable?: boolean;
 }
 
@@ -69,7 +69,7 @@ export function DataTable<T extends { id: string }>({
   canEditOrAdd = true,
   initialUnitFilter
 }: DataTableProps<T>) {
-  const { selectedBranch } = useApp();
+  const { selectedBranch, setSelectedBranch } = useApp();
 
   const [search, setSearch] = useState('');
   const [unitFilter, setUnitFilter] = useState<Branch | 'GLOBAL'>(() => {
@@ -97,13 +97,11 @@ export function DataTable<T extends { id: string }>({
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<'EXCEL' | 'PDF'>('EXCEL');
 
-  // Sync unitFilter when global selectedBranch changes in Navbar (unless explicitly pinned by initialUnitFilter)
+  // Sync unitFilter when global selectedBranch changes in Navbar
   useEffect(() => {
-    if (!initialUnitFilter) {
-      setUnitFilter(selectedBranch);
-      setPage(0);
-    }
-  }, [selectedBranch, initialUnitFilter]);
+    setUnitFilter(selectedBranch);
+    setPage(0);
+  }, [selectedBranch]);
 
   const state = dataService.getState();
   const activeBranches = useMemo(() => dataService.getBranches(true), [state.branches]);
@@ -274,7 +272,7 @@ export function DataTable<T extends { id: string }>({
       if (!search.trim()) return true;
       const term = search.toLowerCase();
       return columns.some(col => {
-        const val = col.accessor(row);
+        const val = col.accessor(row, unitFilter);
         return String(val ?? '').toLowerCase().includes(term);
       });
     });
@@ -286,8 +284,8 @@ export function DataTable<T extends { id: string }>({
     if (!col) return filteredData;
 
     return [...filteredData].sort((a, b) => {
-      const valA = col.accessor(a);
-      const valB = col.accessor(b);
+      const valA = col.accessor(a, unitFilter);
+      const valB = col.accessor(b, unitFilter);
 
       if (valA === valB) return 0;
       if (valA == null) return 1;
@@ -433,7 +431,9 @@ export function DataTable<T extends { id: string }>({
           </Typography>
           {subTitle && (
             <Typography variant="body2" className="text-slate-500 dark:text-slate-400">
-              {subTitle}
+              {subTitle.includes('para a unidade:')
+                ? subTitle.replace(/para a unidade: [A-Za-z0-9_ -]+/i, `para a unidade: ${unitFilter === 'GLOBAL' ? 'Todas as Unidades' : unitFilter}`)
+                : subTitle}
             </Typography>
           )}
         </div>
@@ -526,7 +526,12 @@ export function DataTable<T extends { id: string }>({
               <Select
                 value={unitFilter}
                 label="Unidade"
-                onChange={(e) => { setUnitFilter(e.target.value as any); setPage(0); }}
+                onChange={(e) => {
+                  const val = e.target.value as Branch | 'GLOBAL';
+                  setUnitFilter(val);
+                  setSelectedBranch(val);
+                  setPage(0);
+                }}
                 className="text-xs font-bold"
               >
                 <MenuItem value="GLOBAL">🌐 Todas as Unidades</MenuItem>
@@ -664,10 +669,14 @@ export function DataTable<T extends { id: string }>({
                       direction={orderBy === col.id ? order : 'asc'}
                       onClick={() => handleRequestSort(col.id)}
                     >
-                      {col.label}
+                      {col.id === 'stock'
+                        ? (unitFilter === 'GLOBAL' ? 'Estoque Consolidado (Todas as Unidades)' : `Estoque Unidade ${unitFilter}`)
+                        : col.label}
                     </TableSortLabel>
                   ) : (
-                    col.label
+                    col.id === 'stock'
+                      ? (unitFilter === 'GLOBAL' ? 'Estoque Consolidado (Todas as Unidades)' : `Estoque Unidade ${unitFilter}`)
+                      : col.label
                   )}
                 </TableCell>
               ))}
@@ -700,7 +709,7 @@ export function DataTable<T extends { id: string }>({
                     </TableCell>
                     {activeColumns.map((col) => (
                       <TableCell key={col.id} align={col.align || 'left'} className="text-sm text-slate-800 dark:text-slate-200 py-3">
-                        {col.render ? col.render(row) : String(col.accessor(row) ?? '-')}
+                        {col.render ? col.render(row, unitFilter) : String(col.accessor(row, unitFilter) ?? '-')}
                       </TableCell>
                     ))}
                   </TableRow>

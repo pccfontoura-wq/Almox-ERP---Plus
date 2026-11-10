@@ -140,23 +140,27 @@ export const Almoxarifado: React.FC = () => {
     { id: 'unit', label: 'Unidade', accessor: (p) => p.unit },
     {
       id: 'stock',
-      label: selectedBranch === 'GLOBAL' ? 'Estoque Consolidado (Todas as Unidades)' : `Estoque Local (${selectedBranch})`,
-      accessor: (p) => {
-        return selectedBranch === 'GLOBAL'
-          ? Object.values(p.stockByBranch).reduce((a, b) => a + b, 0)
-          : (p.stockByBranch[selectedBranch] || 0);
+      label: selectedBranch === 'GLOBAL' ? 'Estoque Consolidado (Todas as Unidades)' : `Estoque Unidade ${selectedBranch}`,
+      accessor: (p, currentUnit) => {
+        const target = currentUnit || selectedBranch;
+        const stockMap = p.stockByBranch || {};
+        return target === 'GLOBAL'
+          ? Object.values(stockMap).reduce((a, b) => a + b, 0)
+          : (stockMap[target] || 0);
       },
-      render: (p) => {
-        const qty = selectedBranch === 'GLOBAL'
-          ? Object.values(p.stockByBranch).reduce((a, b) => a + b, 0)
-          : (p.stockByBranch[selectedBranch] || 0);
+      render: (p, currentUnit) => {
+        const target = currentUnit || selectedBranch;
+        const stockMap = p.stockByBranch || {};
+        const qty = target === 'GLOBAL'
+          ? Object.values(stockMap).reduce((a, b) => a + b, 0)
+          : (stockMap[target] || 0);
         const isLow = qty <= p.minStock;
 
         // Collect other branches that have stock
         const otherBranchesWithStock: Array<{ branch: Branch; qty: number }> = [];
-        if (selectedBranch !== 'GLOBAL') {
-          Object.entries(p.stockByBranch || {}).forEach(([b, count]) => {
-            if (b !== selectedBranch && count > 0) {
+        if (target !== 'GLOBAL') {
+          Object.entries(stockMap).forEach(([b, count]) => {
+            if (b !== target && count > 0) {
               otherBranchesWithStock.push({ branch: b as Branch, qty: count });
             }
           });
@@ -170,7 +174,7 @@ export const Almoxarifado: React.FC = () => {
               </Typography>
               {isLow && (
                 <Chip
-                  label={qty === 0 ? '0 no Local' : 'Crítico'}
+                  label={qty === 0 ? `0 em ${target}` : 'Crítico'}
                   size="small"
                   color="error"
                   className="text-[9px] h-4 font-bold"
