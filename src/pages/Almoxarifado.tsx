@@ -530,7 +530,7 @@ export const Almoxarifado: React.FC = () => {
                 <FileSpreadsheet className="w-5 h-5" />
               </div>
               <div>
-                <Typography className="font-extrabold text-xs sm:text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                <Typography component="div" className="font-extrabold text-xs sm:text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
                   Carga em Lote de Produtos Reais (Planilha / CSV)
                   <Chip label="Importação Rápida" size="small" className="text-[10px] h-4 font-bold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" />
                 </Typography>

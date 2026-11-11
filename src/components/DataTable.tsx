@@ -423,7 +423,7 @@ export function DataTable<T extends { id: string }>({
       {/* Top Header & Controls */}
       <Box className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
         <div>
-          <Typography variant="h6" className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <Typography variant="h6" component="div" className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             {title}
             {selectedIds.length > 0 && (
               <Chip label={`${selectedIds.length} selecionados`} color="primary" size="small" className="font-medium" />
