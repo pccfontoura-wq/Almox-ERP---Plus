@@ -13,7 +13,7 @@ import {
   INITIAL_NOTIFICATIONS, INITIAL_SETTINGS, INITIAL_BRANCHES, DEFAULT_BUDGET_POLICY
 } from '../data/seedData';
 import { db } from '../lib/firebase';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 const STORAGE_KEY = 'almoxplus_data_v2';
 
@@ -177,6 +177,9 @@ class DataService {
             });
           }
         }
+        if (!parsed.costCenters || !Array.isArray(parsed.costCenters)) {
+          parsed.costCenters = [];
+        }
         if (!parsed.settings) {
           parsed.settings = INITIAL_SETTINGS;
         } else if (!parsed.settings.budgetPolicy) {
@@ -280,15 +283,37 @@ class DataService {
       const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
 
       onSnapshot(stateDocRef, (snapshot) => {
+        // Ignora eventos otimistas pendentes locais para não sobrescrever estado em memória
+        if (snapshot.metadata && snapshot.metadata.hasPendingWrites) {
+          return;
+        }
+
         if (snapshot.exists()) {
           const cloudData = snapshot.data();
           if (cloudData && cloudData.state) {
-            // Guard: don't overwrite if local changes are more recent than cloud data
+            // Se os dados da nuvem forem mais antigos que a gravação local mais recente, rejeitamos o overwrite
             const cloudUpdatedAt = cloudData.updatedAt ? new Date(cloudData.updatedAt).getTime() : 0;
-            if (this.cloudPushTimer && cloudUpdatedAt < this.lastLocalSaveTime) {
+            if (cloudUpdatedAt > 0 && cloudUpdatedAt < this.lastLocalSaveTime) {
+              // Notifica a nuvem com nosso estado local mais recente
+              this.pushStateToCloud();
               return;
             }
+
             this.isSyncingFromCloud = true;
+
+            // PRESERVAÇÃO E MERGE INTELIGENTE DE CENTROS DE CUSTO:
+            // Garante que nenhum centro de custo criado recentemente localmente seja apagado por snapshot desatualizado
+            if (!cloudData.state.costCenters || !Array.isArray(cloudData.state.costCenters)) {
+              cloudData.state.costCenters = this.state.costCenters || [];
+            } else if (this.state.costCenters && this.state.costCenters.length > 0) {
+              const cloudMap = new Map((cloudData.state.costCenters as CostCenter[]).map(c => [c.id, c]));
+              for (const localCC of this.state.costCenters) {
+                if (localCC && localCC.id && !cloudMap.has(localCC.id)) {
+                  cloudData.state.costCenters.unshift(localCC);
+                }
+              }
+            }
+
             this.state = cloudData.state;
             this.cleanUpProductionRemnants();
             this.cloudSyncStatus = {
@@ -339,15 +364,29 @@ class DataService {
 
   public async pushStateToCloud(): Promise<boolean> {
     try {
+      if (this.cloudPushTimer) {
+        clearTimeout(this.cloudPushTimer);
+        this.cloudPushTimer = null;
+      }
       const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
+      // Sanitiza removendo campos undefined e garantindo integridade JSON
+      const cleanState = JSON.parse(JSON.stringify(this.state));
+      // Limita logs de auditoria no documento principal para evitar estouro de 1MB do Firestore
+      if (cleanState.auditLogs && cleanState.auditLogs.length > 50) {
+        cleanState.auditLogs = cleanState.auditLogs.slice(0, 50);
+      }
+
+      const nowIso = new Date().toISOString();
       await setDoc(stateDocRef, {
-        state: this.state,
-        updatedAt: new Date().toISOString(),
+        state: cleanState,
+        updatedAt: nowIso,
         version: 'production_v1'
       });
+
+      this.lastLocalSaveTime = new Date(nowIso).getTime();
       this.cloudSyncStatus = {
         connected: true,
-        lastSync: new Date().toISOString(),
+        lastSync: nowIso,
         databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
       };
       return true;
@@ -641,29 +680,6 @@ class DataService {
       changed = true;
     }
 
-    // Se o sistema está no Zero Absoluto (sem produtos e sem movimentações/OCs),
-    // purga centros de custo fictícios de demonstração remanescentes para garantir base 100% limpa
-    if (this.state.products.length === 0 && this.state.purchaseOrders.length === 0 && this.state.movements.length === 0) {
-      if (this.state.costCenters && this.state.costCenters.length > 0) {
-        const isRemnantSeed = this.state.costCenters.every(cc => cc.id.startsWith('cc-') || (cc.budget === 0 && cc.spent === 0));
-        if (isRemnantSeed) {
-          this.state.costCenters = [];
-          changed = true;
-        }
-      }
-    } else if (this.state.purchaseOrders.length === 0 && this.state.movements.length === 0) {
-      // Se não há movimentações nem OCs ativas, zera tetos orçamentários residuais
-      const hasResidualBudgets = this.state.costCenters.some(cc => cc.budget > 0 || cc.spent > 0);
-      if (hasResidualBudgets) {
-        this.state.costCenters = this.state.costCenters.map(cc => ({
-          ...cc,
-          budget: 0,
-          spent: 0
-        }));
-        changed = true;
-      }
-    }
-
     if (changed) {
       this.saveState(undefined, true);
       this.pushStateToCloud();
@@ -675,25 +691,42 @@ class DataService {
     if (currentUser.role === 'Visitante') {
       throw new Error('Perfil Visitante não pode cadastrar ou alterar centros de custo.');
     }
+    if (!this.state.costCenters) {
+      this.state.costCenters = [];
+    }
     const existingIndex = this.state.costCenters.findIndex(c => c.id === cc.id);
     if (existingIndex !== -1) {
       const prev = this.state.costCenters[existingIndex];
-      this.state.costCenters[existingIndex] = { ...cc };
+      this.state.costCenters[existingIndex] = { ...cc, updatedAt: new Date().toISOString() };
       this.logAudit(currentUser, 'EDITAR', 'Centros de Custo', `Centro de custo ${cc.code} (${cc.name}) atualizado.`, JSON.stringify(prev), JSON.stringify(cc), cc.branch);
     } else {
-      this.state.costCenters.unshift({ ...cc });
+      this.state.costCenters.unshift({ ...cc, createdAt: new Date().toISOString() });
       this.logAudit(currentUser, 'CRIAR', 'Centros de Custo', `Novo centro de custo ${cc.code} (${cc.name}) cadastrado na unidade ${cc.branch}.`, null, JSON.stringify(cc), cc.branch);
     }
 
     this.saveState();
-    this.pushStateToCloud();
     this.notifyListeners();
+    this.pushStateToCloud();
+
+    // Gravação redundante como documento individual na coleção costCenters para máxima garantia de persistência
+    try {
+      const ccClean = JSON.parse(JSON.stringify(cc));
+      setDoc(doc(db, 'costCenters', cc.id), ccClean).catch(err => {
+        console.warn('Gravação em coleção costCenters (aviso não-bloqueante):', err.message);
+      });
+    } catch (e) {
+      // ignore
+    }
+
     return cc;
   }
 
   public deleteCostCenter(id: string, currentUser: User): void {
     if (currentUser.role === 'Visitante') {
       throw new Error('Perfil Visitante não pode excluir centros de custo.');
+    }
+    if (!this.state.costCenters) {
+      this.state.costCenters = [];
     }
     const idx = this.state.costCenters.findIndex(c => c.id === id);
     if (idx === -1) throw new Error('Centro de custo não encontrado.');
@@ -710,8 +743,16 @@ class DataService {
     );
 
     this.saveState();
-    this.pushStateToCloud();
     this.notifyListeners();
+    this.pushStateToCloud();
+
+    try {
+      deleteDoc(doc(db, 'costCenters', id)).catch(err => {
+        console.warn('Exclusão em coleção costCenters (aviso não-bloqueante):', err.message);
+      });
+    } catch (e) {
+      // ignore
+    }
   }
 
   public clearAllCostCenters(currentUser: User): void {
@@ -3465,6 +3506,9 @@ class DataService {
 
   // --- ANÁLISE COMPARATIVA DE CENTROS DE CUSTO (COMPRADO vs. ENTREGUE) ---
   public getCostCenterComparison(costCenterId: string): CostCenterComparison | null {
+    if (!this.state.costCenters) {
+      this.state.costCenters = [];
+    }
     const cc = this.state.costCenters.find(c => c.id === costCenterId);
     if (!cc) return null;
 
@@ -3559,6 +3603,7 @@ class DataService {
 
     return {
       id: cc.id,
+      branch: cc.branch,
       costCenter: cc,
       budget: cc.budget,
       totalPurchased,
@@ -3569,11 +3614,16 @@ class DataService {
       purchaseOrders: pos,
       requisitions,
       movements,
-      productBalances
+      productBalances,
+      createdAt: cc.createdAt || new Date().toISOString(),
+      date: cc.createdAt || new Date().toISOString()
     };
   }
 
   public getAllCostCentersComparison(selectedBranch?: string): CostCenterComparison[] {
+    if (!this.state.costCenters) {
+      this.state.costCenters = [];
+    }
     const list = this.state.costCenters
       .filter(c => !selectedBranch || selectedBranch === 'GLOBAL' || c.branch === selectedBranch)
       .map(c => this.getCostCenterComparison(c.id))

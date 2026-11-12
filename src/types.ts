@@ -282,6 +282,7 @@ export interface CostCenterProductBalance {
 export interface CostCenterComparison {
   id: string;
   costCenter: CostCenter;
+  branch?: Branch;
   budget: number;
   totalPurchased: number; // Valor total adquirido em OCs/SCs
   totalDelivered: number; // Valor total baixado/consumido no almoxarifado
@@ -292,6 +293,8 @@ export interface CostCenterComparison {
   requisitions: Requisition[];
   movements: Movement[];
   productBalances: CostCenterProductBalance[];
+  createdAt?: string;
+  date?: string;
 }
 
 export type AssetStatus = 'EM_USO' | 'EMPRESTADO' | 'EM_MANUTENCAO' | 'BAIXADO';
@@ -372,6 +375,8 @@ export interface CostCenter {
   spent: number;
   responsible: string;
   active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type AuditOperation = 'CRIAR' | 'ALTERAR' | 'EXCLUIR' | 'LOGIN' | 'TRANSFERIR' | 'RECONCILIAR' | 'RECURSO' | 'EDITAR' | 'COMPRAR' | 'INVENTARIAR' | 'CONFIGURACAO';

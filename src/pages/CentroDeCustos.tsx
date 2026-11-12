@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Box, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, MenuItem, Select, FormControl, InputLabel, Alert, LinearProgress,
@@ -8,7 +8,7 @@ import {
   Calculator, Plus, ShoppingBag, Truck, Package, HelpCircle, Eye,
   BarChart3, Scale, Layers, CheckCircle2, AlertTriangle, ArrowUpRight,
   TrendingDown, TrendingUp, Info, DollarSign, ArrowRightLeft, ShieldCheck, Sliders,
-  RotateCcw, Trash2
+  RotateCcw, Trash2, Pencil, Building2
 } from 'lucide-react';
 
 import { dataService } from '../services/dataService';
@@ -16,7 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { Breadcrumb } from '../components/Breadcrumb';
 import { DataTable, Column } from '../components/DataTable';
-import { CostCenter, Branch, CostCenterComparison, CostCenterProductBalance } from '../types';
+import { CostCenter, Branch, CostCenterComparison, CostCenterProductBalance, User } from '../types';
 
 interface CentroDeCustosProps {
   onNavigate?: (tab: string) => void;
@@ -24,7 +24,7 @@ interface CentroDeCustosProps {
 
 export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) => {
   const { currentUser } = useAuth();
-  const { selectedBranch, refreshData } = useApp();
+  const { selectedBranch, setSelectedBranch, refreshData, dataVersion } = useApp();
 
   const [ccModalOpen, setCcModalOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -49,20 +49,43 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
 
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    confirmColor?: 'error' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
+
   const [ccForm, setCcForm] = useState<Partial<CostCenter>>({});
   const [formError, setFormError] = useState<string | null>(null);
 
-  const state = dataService.getState();
+  const [localTick, setLocalTick] = useState(0);
+
+  // Inscrever-se nas alterações do dataService
+  useEffect(() => {
+    const unsub = dataService.subscribe(() => {
+      setLocalTick(t => t + 1);
+    });
+    return unsub;
+  }, []);
+
+  const state = useMemo(() => dataService.getState(), [dataVersion, localTick]);
   const canEdit = currentUser?.role !== 'Visitante';
 
   // Obter comparações enriquecidas (Comprado vs. Entregue) para os Centros de Custo
+  // Fornecemos a base completa ('GLOBAL') para que o DataTable e seu filtro interno de Unidade funcionem em perfeita harmonia
   const comparisons = useMemo(() => {
-    return dataService.getAllCostCentersComparison(selectedBranch);
-  }, [state, selectedBranch]);
+    return dataService.getAllCostCentersComparison('GLOBAL');
+  }, [state, localTick, dataVersion]);
 
-  // Totais consolidados para os cards superiores
+  // Totais consolidados para os cards superiores (respeitando a unidade selecionada)
   const totals = useMemo(() => {
-    return comparisons.reduce(
+    const list = selectedBranch === 'GLOBAL'
+      ? comparisons
+      : comparisons.filter(c => c.costCenter.branch === selectedBranch);
+
+    return list.reduce(
       (acc, curr) => {
         acc.budget += curr.budget;
         acc.totalPurchased += curr.totalPurchased;
@@ -79,7 +102,7 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
         remainingBudget: 0
       }
     );
-  }, [comparisons]);
+  }, [comparisons, selectedBranch]);
 
   const selectedComparison = useMemo(() => {
     if (!selectedCcId) return null;
@@ -223,6 +246,17 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
           >
             Extrato
           </Button>
+          {canEdit && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<Pencil className="w-3.5 h-3.5" />}
+              onClick={() => handleEditCC(c.costCenter)}
+              className="text-xs font-bold py-1 px-2.5 rounded-lg border-slate-300 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+            >
+              Editar
+            </Button>
+          )}
           {currentUser?.role === 'Master' && (
             <Tooltip title="Excluir Centro de Custo">
               <IconButton
@@ -240,59 +274,107 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
     }
   ];
 
+  const handleEditCC = (costCenter: CostCenter) => {
+    setCcForm({
+      id: costCenter.id,
+      code: costCenter.code,
+      name: costCenter.name,
+      branch: costCenter.branch,
+      budget: costCenter.budget,
+      spent: costCenter.spent,
+      responsible: costCenter.responsible,
+      active: costCenter.active
+    });
+    setFormError(null);
+    setCcModalOpen(true);
+  };
+
   const handleDeleteCC = (id: string, name: string) => {
-    if (!currentUser) return;
-    if (!window.confirm(`Deseja realmente excluir o centro de custo "${name}"?`)) return;
-    try {
-      dataService.deleteCostCenter(id, currentUser);
-      refreshData();
-      setActionSuccess(`Centro de custo "${name}" excluído com sucesso.`);
-      setTimeout(() => setActionSuccess(null), 4000);
-    } catch (err: any) {
-      setFormError(err.message || 'Erro ao excluir centro de custo.');
-    }
+    const activeUser = currentUser || state.users[0];
+    if (!activeUser) return;
+    setConfirmDialog({
+      open: true,
+      title: 'Excluir Centro de Custo',
+      message: `Deseja realmente excluir o centro de custo "${name}"?`,
+      confirmColor: 'error',
+      onConfirm: () => {
+        try {
+          dataService.deleteCostCenter(id, activeUser);
+          refreshData();
+          setActionSuccess(`Centro de custo "${name}" excluído com sucesso.`);
+          setTimeout(() => setActionSuccess(null), 4000);
+        } catch (err: any) {
+          setFormError(err.message || 'Erro ao excluir centro de custo.');
+        }
+      }
+    });
   };
 
   const handleClearAllCostCenters = () => {
-    if (!currentUser) return;
-    if (currentUser.role !== 'Master') {
-      alert('Apenas usuários com perfil Master podem zerar todos os centros de custo.');
+    const activeUser = currentUser || state.users[0];
+    if (!activeUser) return;
+    if (activeUser.role !== 'Master') {
+      setFormError('Apenas usuários com perfil Master podem zerar todos os centros de custo.');
       return;
     }
-    if (window.confirm('ATENÇÃO: Deseja realmente excluir TODOS os centros de custo cadastrados (Zero Absoluto)? Não restará nenhum centro de custo no banco de dados, deixando o sistema 100% limpo para cadastramento do zero.')) {
-      try {
-        dataService.clearAllCostCenters(currentUser);
-        refreshData();
-        setActionSuccess('Todos os centros de custo foram excluídos com sucesso. Base em Zero Absoluto.');
-        setTimeout(() => setActionSuccess(null), 5000);
-      } catch (err: any) {
-        setFormError(err.message || 'Erro ao zerar centros de custo.');
+    setConfirmDialog({
+      open: true,
+      title: 'Excluir Todos os Centros de Custo (Zero Absoluto)',
+      message: 'ATENÇÃO: Deseja realmente excluir TODOS os centros de custo cadastrados (Zero Absoluto)? Não restará nenhum centro de custo no banco de dados, deixando o sistema 100% limpo para cadastramento do zero.',
+      confirmColor: 'error',
+      onConfirm: () => {
+        try {
+          dataService.clearAllCostCenters(activeUser);
+          refreshData();
+          setActionSuccess('Todos os centros de custo foram excluídos com sucesso. Base em Zero Absoluto.');
+          setTimeout(() => setActionSuccess(null), 5000);
+        } catch (err: any) {
+          setFormError(err.message || 'Erro ao zerar centros de custo.');
+        }
       }
-    }
+    });
   };
 
   const handleSaveCC = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
+    const activeUser: User = currentUser || state.users[0] || {
+      id: 'user-master-zynecta',
+      name: 'Administrador Master',
+      email: 'zynecta@gmail.com',
+      role: 'Master',
+      branch: 'SP' as Branch,
+      active: true
+    };
+
     try {
+      const budgetNum = Number(ccForm.budget);
+      const targetBranch: Branch = (ccForm.branch as Branch) || (selectedBranch === 'GLOBAL' ? 'SP' : selectedBranch);
       const cc: CostCenter = {
-        id: ccForm.id || `cc-${Date.now()}`,
-        code: ccForm.code || `CC-${Math.floor(100 + Math.random() * 900)}`,
-        name: ccForm.name || 'Centro de Custo',
-        branch: ccForm.branch || 'SP',
-        budget: Number(ccForm.budget) || 100000,
+        id: ccForm.id || `cc-custom-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        code: (ccForm.code || `CC-${Math.floor(100 + Math.random() * 900)}`).trim(),
+        name: (ccForm.name || 'Centro de Custo').trim(),
+        branch: targetBranch,
+        budget: !isNaN(budgetNum) && budgetNum >= 0 ? budgetNum : 100000,
         spent: ccForm.spent || 0,
-        responsible: ccForm.responsible || currentUser.name,
-        active: true
+        responsible: (ccForm.responsible || activeUser.name).trim(),
+        active: ccForm.active !== undefined ? ccForm.active : true
       };
 
-      dataService.saveCostCenter(cc, currentUser);
+      dataService.saveCostCenter(cc, activeUser);
       setCcModalOpen(false);
+      setCcForm({});
+
+      // Se a unidade ativa for diferente da cadastrada e não for GLOBAL, ajustamos para a unidade do novo CC para garantir visualização imediata
+      if (selectedBranch !== 'GLOBAL' && selectedBranch !== cc.branch) {
+        setSelectedBranch(cc.branch);
+      }
       refreshData();
-      setActionSuccess(`Centro de custo ${cc.code} salvo com sucesso.`);
-      setTimeout(() => setActionSuccess(null), 4000);
+      setLocalTick(t => t + 1);
+
+      setActionSuccess(`Centro de custo ${cc.code} (${cc.name}) cadastrado/atualizado com sucesso na Unidade ${cc.branch}!`);
+      setTimeout(() => setActionSuccess(null), 5000);
     } catch (e: any) {
-      setFormError(e.message);
+      setFormError(e.message || 'Erro ao cadastrar centro de custo.');
     }
   };
 
@@ -502,17 +584,24 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
                   color="warning"
                   startIcon={<RotateCcw className="w-4 h-4 text-amber-600" />}
                   onClick={() => {
-                    if (window.confirm('Atenção: Deseja zerar os orçamentos aprovados de todos os centros de custo para R$ 0,00 (Marco Zero de Produção)?')) {
-                      if (!currentUser) return;
-                      try {
-                        dataService.resetCostCenterBudgets(currentUser);
-                        refreshData();
-                        setActionSuccess('Orçamentos aprovados de todos os centros de custo foram zerados para R$ 0,00 com sucesso.');
-                        setTimeout(() => setActionSuccess(null), 5000);
-                      } catch (err: any) {
-                        setFormError(err.message || 'Erro ao zerar orçamentos.');
+                    const activeUser = currentUser || state.users[0];
+                    if (!activeUser) return;
+                    setConfirmDialog({
+                      open: true,
+                      title: 'Zerar Orçamentos Aprovados',
+                      message: 'Atenção: Deseja zerar os orçamentos aprovados de todos os centros de custo para R$ 0,00 (Marco Zero de Produção)?',
+                      confirmColor: 'warning',
+                      onConfirm: () => {
+                        try {
+                          dataService.resetCostCenterBudgets(activeUser);
+                          refreshData();
+                          setActionSuccess('Orçamentos aprovados de todos os centros de custo foram zerados para R$ 0,00 com sucesso.');
+                          setTimeout(() => setActionSuccess(null), 5000);
+                        } catch (err: any) {
+                          setFormError(err.message || 'Erro ao zerar orçamentos.');
+                        }
                       }
-                    }
+                    });
                   }}
                   className="font-bold text-xs capitalize text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700"
                 >
@@ -656,10 +745,48 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
         </Card>
       </div>
 
+      {/* FILTRO DE UNIDADE RÁPIDO & TABELA COMPARATIVA */}
+      <Box className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <div className="flex items-center gap-2">
+          <Building2 className="w-4 h-4 text-blue-600" />
+          <Typography className="text-xs font-bold text-slate-700 dark:text-slate-300">
+            Filtrar Unidade:
+          </Typography>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Button
+            size="small"
+            variant={selectedBranch === 'GLOBAL' ? 'contained' : 'outlined'}
+            onClick={() => setSelectedBranch('GLOBAL')}
+            className={`text-xs font-bold ${selectedBranch === 'GLOBAL' ? 'bg-blue-600 text-white' : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}
+          >
+            Todas as Unidades ({state.costCenters?.length || 0})
+          </Button>
+          {dataService.getBranches(true).map(b => {
+            const count = (state.costCenters || []).filter(c => c.branch === b.code).length;
+            return (
+              <Button
+                key={b.id}
+                size="small"
+                variant={selectedBranch === b.code ? 'contained' : 'outlined'}
+                onClick={() => setSelectedBranch(b.code)}
+                className={`text-xs font-bold ${selectedBranch === b.code ? 'bg-blue-600 text-white' : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}
+              >
+                {b.code} ({count})
+              </Button>
+            );
+          })}
+        </div>
+      </Box>
+
       {/* TABELA COMPARATIVA PRINCIPAL */}
       <DataTable
         title="Centros de Custos: Comparativo Comprado vs. Entregue"
-        subTitle="Acompanhamento do que a empresa comprou para o setor e o que foi efetivamente consumido no almoxarifado."
+        subTitle={
+          selectedBranch === 'GLOBAL'
+            ? `Exibindo centros de custo consolidados de todas as unidades da rede (${comparisons.length} setores cadastrados).`
+            : `Exibindo centros de custo ativos para a Unidade ${selectedBranch} (${comparisons.filter(c => c.costCenter.branch === selectedBranch).length} setores cadastrados).`
+        }
         columns={ccColumns}
         data={comparisons}
         onAddClick={() => {
@@ -668,8 +795,9 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
             name: '',
             branch: selectedBranch === 'GLOBAL' ? 'SP' : selectedBranch,
             budget: 100000,
-            responsible: currentUser?.name || ''
+            responsible: currentUser?.name || 'Administrador Master'
           });
+          setFormError(null);
           setCcModalOpen(true);
         }}
         addButtonLabel="Cadastrar Centro de Custo"
@@ -700,12 +828,25 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
                     </Typography>
                   </div>
                 </div>
-                <Chip
-                  label={selectedComparison.costCenter.active ? 'Centro de Custo Ativo' : 'Inativo'}
-                  color={selectedComparison.costCenter.active ? 'success' : 'default'}
-                  size="small"
-                  className="font-bold text-xs"
-                />
+                <div className="flex items-center gap-2">
+                  <Chip
+                    label={selectedComparison.costCenter.active ? 'Centro de Custo Ativo' : 'Inativo'}
+                    color={selectedComparison.costCenter.active ? 'success' : 'default'}
+                    size="small"
+                    className="font-bold text-xs"
+                  />
+                  {canEdit && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<Pencil className="w-3.5 h-3.5" />}
+                      onClick={() => handleEditCC(selectedComparison.costCenter)}
+                      className="text-xs font-bold border-slate-300 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+                    >
+                      Editar Orçamento
+                    </Button>
+                  )}
+                </div>
               </div>
 
               <Tabs
@@ -1026,7 +1167,9 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
       {/* MODAL DE CADASTRO / EDIÇÃO */}
       <Dialog open={ccModalOpen} onClose={() => setCcModalOpen(false)} maxWidth="xs" fullWidth>
         <form onSubmit={handleSaveCC}>
-          <DialogTitle className="font-bold">Cadastrar Centro de Custo</DialogTitle>
+          <DialogTitle className="font-bold">
+            {ccForm.id ? `Editar Centro de Custo (${ccForm.code || ''})` : 'Cadastrar Novo Centro de Custo'}
+          </DialogTitle>
           <DialogContent dividers className="space-y-4">
             {formError && <Alert severity="error">{formError}</Alert>}
 
@@ -1049,7 +1192,7 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
             <FormControl fullWidth required>
               <InputLabel>Unidade</InputLabel>
               <Select
-                value={ccForm.branch || 'SP'}
+                value={ccForm.branch || (selectedBranch === 'GLOBAL' ? 'SP' : selectedBranch)}
                 onChange={(e) => setCcForm({ ...ccForm, branch: e.target.value as Branch })}
                 label="Unidade"
               >
@@ -1065,8 +1208,9 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
               fullWidth
               type="number"
               label="Orçamento Aprovado (R$)"
-              value={ccForm.budget || 100000}
-              onChange={(e) => setCcForm({ ...ccForm, budget: Number(e.target.value) })}
+              value={ccForm.budget !== undefined ? ccForm.budget : 100000}
+              onChange={(e) => setCcForm({ ...ccForm, budget: e.target.value === '' ? ('' as any) : Number(e.target.value) })}
+              helperText="Valor teto ou dotação orçamentária aprovada para este setor."
               required
             />
 
@@ -1080,7 +1224,9 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setCcModalOpen(false)}>Cancelar</Button>
-            <Button type="submit" variant="contained" color="primary">Salvar</Button>
+            <Button type="submit" variant="contained" color="primary">
+              {ccForm.id ? 'Salvar Alterações' : 'Cadastrar'}
+            </Button>
           </DialogActions>
         </form>
       </Dialog>
@@ -1261,6 +1407,31 @@ export const CentroDeCustos: React.FC<CentroDeCustosProps> = ({ onNavigate }) =>
           </DialogActions>
         </form>
       </Dialog>
+
+      {/* MODAL DE CONFIRMAÇÃO DE AÇÕES CRÍTICAS (SEM BLOCK DE BROWSER) */}
+      {confirmDialog && (
+        <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog(null)} maxWidth="xs" fullWidth>
+          <DialogTitle className="font-bold text-slate-900 dark:text-slate-100">{confirmDialog.title}</DialogTitle>
+          <DialogContent dividers>
+            <Typography variant="body2" className="text-slate-600 dark:text-slate-300">
+              {confirmDialog.message}
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmDialog(null)} color="inherit">Cancelar</Button>
+            <Button
+              variant="contained"
+              color={confirmDialog.confirmColor || 'primary'}
+              onClick={() => {
+                confirmDialog.onConfirm();
+                setConfirmDialog(null);
+              }}
+            >
+              Confirmar
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </Box>
   );
 };
