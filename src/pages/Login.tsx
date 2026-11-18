@@ -18,7 +18,18 @@ export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    try {
+      const msg = sessionStorage.getItem('almoxplus_session_expired');
+      if (msg) {
+        sessionStorage.removeItem('almoxplus_session_expired');
+        return msg;
+      }
+    } catch (e) {
+      // ignore
+    }
+    return null;
+  });
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
 
   const cleanCurrentEmail = email.toLowerCase().trim();

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Box, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, MenuItem, Select, FormControl, InputLabel, Alert, Chip,
@@ -15,7 +15,7 @@ import { Asset, AssetStatus, Branch } from '../types';
 
 export const Patrimonio: React.FC = () => {
   const { currentUser } = useAuth();
-  const { selectedBranch, refreshData } = useApp();
+  const { selectedBranch, refreshData, dataVersion } = useApp();
 
   const [assetModalOpen, setAssetModalOpen] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
@@ -30,8 +30,11 @@ export const Patrimonio: React.FC = () => {
   const [returnNotes, setReturnNotes] = useState('');
   const [sendToMaintenance, setSendToMaintenance] = useState(false);
 
-  const state = dataService.getState();
-  const assets = state.assets.filter(a => selectedBranch === 'GLOBAL' || a.branch === selectedBranch);
+  const state = useMemo(() => dataService.getState(), [dataVersion]);
+  const assets = useMemo(
+    () => state.assets.filter(a => selectedBranch === 'GLOBAL' || a.branch === selectedBranch),
+    [state.assets, selectedBranch]
+  );
   const canEdit = currentUser?.role !== 'Visitante';
 
   const assetColumns: Column<Asset>[] = [
@@ -208,6 +211,7 @@ export const Patrimonio: React.FC = () => {
         columns={assetColumns}
         data={assets}
         onAddClick={() => {
+          setFormError(null);
           setEditingAsset({
             assetTag: `PAT-${selectedBranch === 'GLOBAL' ? 'SP' : selectedBranch}-${Math.floor(1000 + Math.random() * 9000)}`,
             name: '',

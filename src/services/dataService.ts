@@ -13,9 +13,24 @@ import {
   INITIAL_NOTIFICATIONS, INITIAL_SETTINGS, INITIAL_BRANCHES, DEFAULT_BUDGET_POLICY
 } from '../data/seedData';
 import { db } from '../lib/firebase';
-import { doc, getDoc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, getDocFromServer, setDoc, onSnapshot } from 'firebase/firestore';
 
 const STORAGE_KEY = 'almoxplus_data_v2';
+const BACKUP_STORAGE_KEY = 'almoxplus_backups_v2';
+const LOCAL_UPDATED_AT_KEY = 'almoxplus_local_updated_at';
+const MODULE_TIMESTAMPS_KEY = 'almoxplus_module_timestamps';
+
+type ModuleKey = 'meta' | 'catalog' | 'movements' | 'inventories' | 'purchases' | 'assets' | 'logs';
+const ALL_MODULES: ModuleKey[] = ['meta', 'catalog', 'movements', 'inventories', 'purchases', 'assets', 'logs'];
+const MODULE_DOC_IDS: Record<ModuleKey, string> = {
+  meta: 'almoxplus_meta',
+  catalog: 'almoxplus_catalog',
+  movements: 'almoxplus_movements',
+  inventories: 'almoxplus_inventories',
+  purchases: 'almoxplus_purchases',
+  assets: 'almoxplus_assets',
+  logs: 'almoxplus_logs'
+};
 
 const DEFAULT_BACKUP_CONFIG: BackupRoutineConfig = {
   enabled: true,
@@ -54,9 +69,25 @@ interface AppState {
 
 class DataService {
   private state: AppState;
+  private backupSnapshots: BackupSnapshot[] = [];
   private listeners: Array<() => void> = [];
   private isSyncingFromCloud: boolean = false;
+  private cloudBootstrapped: boolean = false;
+  private hasRealLocalState: boolean = false;
+  private lastLocalSaveTime: number = 0;
+  private moduleTimestamps: Record<ModuleKey, number> = {
+    meta: 0,
+    catalog: 0,
+    movements: 0,
+    inventories: 0,
+    purchases: 0,
+    assets: 0,
+    logs: 0
+  };
+  private lastModuleJson: Partial<Record<ModuleKey, string>> = {};
+  private dirtyModules: Set<ModuleKey> = new Set();
   private cloudPushTimer: any = null;
+  private isPushingToCloud: boolean = false;
   private cloudSyncStatus: {
     connected: boolean;
     lastSync: string | null;
@@ -69,129 +100,230 @@ class DataService {
   };
 
   constructor() {
+    this.loadMetaTimestamps();
+    this.loadBackupsFromStorage();
     this.state = this.loadState();
-    this.cleanUpProductionRemnants();
-    this.ensureBackupRoutineInitialized();
+    this.cleanUpProductionRemnants(undefined, true);
+    this.initBackupConfigInMemory();
+    this.captureModuleBaselines();
+    this.registerUnloadFlush();
     this.initCloudSync();
   }
 
-  private loadState(): AppState {
+  private loadMetaTimestamps() {
+    if (typeof window === 'undefined') return;
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (!parsed.purchaseRequests) {
-          parsed.purchaseRequests = INITIAL_PURCHASE_REQUESTS;
+      const tsRaw = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
+      if (tsRaw) {
+        const parsedTs = Number(tsRaw);
+        if (!isNaN(parsedTs) && parsedTs > 0) {
+          this.lastLocalSaveTime = parsedTs;
         }
-        if (!parsed.branches || !Array.isArray(parsed.branches) || parsed.branches.length === 0) {
-          parsed.branches = INITIAL_BRANCHES;
-        } else {
-          // Migrate existing branches to "Unidade" nomenclature and enrich with full seed data if missing
-          parsed.branches = parsed.branches.map((b: BranchInfo) => {
-            const seedMatch = INITIAL_BRANCHES.find(sb => sb.code === b.code);
-            const updatedName = b.name ? b.name.replace(/Filial/gi, 'Unidade') : (seedMatch?.name || `Unidade ${b.code}`);
-            return {
-              ...(seedMatch || {}),
-              ...b,
-              name: updatedName,
-              corporateName: b.corporateName || seedMatch?.corporateName || `Almox Plus Tecnologia e Logística S.A. - Unidade ${b.code}`,
-              unitType: b.unitType || seedMatch?.unitType || 'UNIDADE_OPERACIONAL',
-              cnpj: b.cnpj || seedMatch?.cnpj || '',
-              stateRegistration: b.stateRegistration || seedMatch?.stateRegistration || '',
-              municipalRegistration: b.municipalRegistration || seedMatch?.municipalRegistration || '',
-              zipCode: b.zipCode || seedMatch?.zipCode || '',
-              street: b.street || seedMatch?.street || '',
-              number: b.number || seedMatch?.number || '',
-              complement: b.complement || seedMatch?.complement || '',
-              neighborhood: b.neighborhood || seedMatch?.neighborhood || '',
-              managerRole: b.managerRole || seedMatch?.managerRole || 'Gestor de Unidade',
-              whatsapp: b.whatsapp || seedMatch?.whatsapp || '',
-              operatingHours: b.operatingHours || seedMatch?.operatingHours || 'Seg a Sex, 08:00 às 18:00',
-              areaM2: b.areaM2 ?? seedMatch?.areaM2,
-              notes: b.notes || seedMatch?.notes || ''
-            };
-          });
-        }
-        // Migrate cached strings from Filial to Unidade
-        if (parsed.inventories && Array.isArray(parsed.inventories)) {
-          parsed.inventories.forEach((inv: any) => {
-            if (inv.title) inv.title = inv.title.replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
-          });
-        }
-        if (parsed.transfers && Array.isArray(parsed.transfers)) {
-          parsed.transfers.forEach((trf: any) => {
-            if (trf.notes) trf.notes = trf.notes.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
-          });
-        }
-        if (parsed.notifications && Array.isArray(parsed.notifications)) {
-          parsed.notifications.forEach((n: any) => {
-            if (n.title) n.title = n.title.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
-            if (n.message) n.message = n.message.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
-          });
-        }
-        if (parsed.auditLogs && Array.isArray(parsed.auditLogs)) {
-          parsed.auditLogs.forEach((l: any) => {
-            if (l.module) l.module = l.module.replace(/Filiais/g, 'Unidades').replace(/Filial/g, 'Unidade');
-            if (l.details) l.details = l.details.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
-          });
-        }
-        // Ensure all products have keys for all branches and sync batch/expiration metadata
-        if (parsed.products && Array.isArray(parsed.products)) {
-          for (const p of parsed.products) {
-            if (!p.stockByBranch) p.stockByBranch = {};
-            for (const b of parsed.branches) {
-              if (p.stockByBranch[b.code] === undefined) {
-                p.stockByBranch[b.code] = 0;
-              }
-            }
-            // Sync seed batch information and expiration dates
-            const seedProd = INITIAL_PRODUCTS.find((sp: any) => sp.code === p.code);
-            if (seedProd) {
-              if (seedProd.batchNumber && !p.batchNumber) p.batchNumber = seedProd.batchNumber;
-              if (seedProd.batches && (!p.batches || p.batches.length === 0)) p.batches = seedProd.batches;
-              if (seedProd.expirationDate) p.expirationDate = seedProd.expirationDate;
+      }
+      const modRaw = localStorage.getItem(MODULE_TIMESTAMPS_KEY);
+      if (modRaw) {
+        const parsedMod = JSON.parse(modRaw);
+        if (parsedMod && typeof parsedMod === 'object') {
+          for (const mod of ALL_MODULES) {
+            if (typeof parsedMod[mod] === 'number' && parsedMod[mod] > 0) {
+              this.moduleTimestamps[mod] = parsedMod[mod];
             }
           }
         }
-        // Ensure Master account zynecta@gmail.com is always present, active, role Master and password Zynecta@1973
-        if (parsed.users && Array.isArray(parsed.users)) {
-          const zynectaIndex = parsed.users.findIndex((u: any) => u.email?.toLowerCase() === 'zynecta@gmail.com');
-          if (zynectaIndex >= 0) {
-            parsed.users[zynectaIndex].role = 'Master';
-            parsed.users[zynectaIndex].password = 'Zynecta@1973';
-            parsed.users[zynectaIndex].active = true;
-          } else {
-            parsed.users.unshift({
-              id: 'user-master-zynecta',
-              name: 'Administrador Master',
-              email: 'zynecta@gmail.com',
-              password: 'Zynecta@1973',
-              role: 'Master',
-              branch: 'SP',
-              active: true,
-              firstAccess: false,
-              createdAt: '2025-01-01T08:00:00Z',
-              department: 'Diretoria Geral & TI',
-              phone: '(11) 98765-4321',
-              avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
-            });
-          }
-        }
-        if (!parsed.costCenters || !Array.isArray(parsed.costCenters)) {
-          parsed.costCenters = [];
-        }
-        if (!parsed.settings) {
-          parsed.settings = INITIAL_SETTINGS;
-        } else if (!parsed.settings.budgetPolicy) {
-          parsed.settings.budgetPolicy = DEFAULT_BUDGET_POLICY;
-        }
-        return parsed;
       }
     } catch (e) {
-      console.error('Erro ao carregar estado do localStorage:', e);
+      // ignore
+    }
+  }
+
+  private persistMetaTimestamps() {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(LOCAL_UPDATED_AT_KEY, String(this.lastLocalSaveTime));
+      localStorage.setItem(MODULE_TIMESTAMPS_KEY, JSON.stringify(this.moduleTimestamps));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  private inferStateTimestamp(s: Partial<AppState>): number {
+    let maxTs = 0;
+    const consider = (val?: string) => {
+      if (!val) return;
+      const t = new Date(val).getTime();
+      if (!isNaN(t) && t > maxTs) maxTs = t;
+    };
+    if (Array.isArray(s.auditLogs)) {
+      s.auditLogs.slice(0, 10).forEach(l => consider(l?.timestamp));
+    }
+    if (Array.isArray(s.movements)) {
+      s.movements.slice(0, 10).forEach(m => consider(m?.date));
+    }
+    if (Array.isArray(s.inventories)) {
+      s.inventories.slice(0, 10).forEach(inv => {
+        consider(inv?.reconciledAt);
+        consider(inv?.completedAt);
+        consider(inv?.startedAt);
+      });
+    }
+    if (Array.isArray(s.products)) {
+      s.products.slice(0, 20).forEach(p => {
+        consider(p?.updatedAt);
+        consider(p?.createdAt);
+      });
+    }
+    if (Array.isArray(s.costCenters)) {
+      s.costCenters.slice(0, 10).forEach(c => {
+        consider(c?.updatedAt);
+        consider(c?.createdAt);
+      });
+    }
+    return maxTs;
+  }
+
+  private normalizeState(parsed: any): AppState {
+    if (!parsed.purchaseRequests || !Array.isArray(parsed.purchaseRequests)) {
+      parsed.purchaseRequests = [];
+    }
+    if (!parsed.purchaseOrders || !Array.isArray(parsed.purchaseOrders)) {
+      parsed.purchaseOrders = [];
+    }
+    if (!parsed.movements || !Array.isArray(parsed.movements)) {
+      parsed.movements = [];
+    }
+    if (!parsed.transfers || !Array.isArray(parsed.transfers)) {
+      parsed.transfers = [];
+    }
+    if (!parsed.requisitions || !Array.isArray(parsed.requisitions)) {
+      parsed.requisitions = [];
+    }
+    if (!parsed.inventories || !Array.isArray(parsed.inventories)) {
+      parsed.inventories = [];
+    }
+    if (!parsed.assets || !Array.isArray(parsed.assets)) {
+      parsed.assets = [];
+    }
+    if (!parsed.products || !Array.isArray(parsed.products)) {
+      parsed.products = [];
+    }
+    if (!parsed.auditLogs || !Array.isArray(parsed.auditLogs)) {
+      parsed.auditLogs = [];
+    }
+    if (!parsed.notifications || !Array.isArray(parsed.notifications)) {
+      parsed.notifications = [];
+    }
+    if (!parsed.costCenters || !Array.isArray(parsed.costCenters)) {
+      parsed.costCenters = [];
     }
 
-    const initialState: AppState = {
+    if (!parsed.branches || !Array.isArray(parsed.branches) || parsed.branches.length === 0) {
+      parsed.branches = INITIAL_BRANCHES;
+    } else {
+      parsed.branches = parsed.branches.map((b: BranchInfo) => {
+        const seedMatch = INITIAL_BRANCHES.find(sb => sb.code === b.code);
+        const updatedName = b.name ? b.name.replace(/Filial/gi, 'Unidade') : (seedMatch?.name || `Unidade ${b.code}`);
+        return {
+          ...(seedMatch || {}),
+          ...b,
+          name: updatedName,
+          corporateName: b.corporateName || seedMatch?.corporateName || `Almox Plus Tecnologia e Logística S.A. - Unidade ${b.code}`,
+          unitType: b.unitType || seedMatch?.unitType || 'UNIDADE_OPERACIONAL',
+          cnpj: b.cnpj || seedMatch?.cnpj || '',
+          stateRegistration: b.stateRegistration || seedMatch?.stateRegistration || '',
+          municipalRegistration: b.municipalRegistration || seedMatch?.municipalRegistration || '',
+          zipCode: b.zipCode || seedMatch?.zipCode || '',
+          street: b.street || seedMatch?.street || '',
+          number: b.number || seedMatch?.number || '',
+          complement: b.complement || seedMatch?.complement || '',
+          neighborhood: b.neighborhood || seedMatch?.neighborhood || '',
+          managerRole: b.managerRole || seedMatch?.managerRole || 'Gestor de Unidade',
+          whatsapp: b.whatsapp || seedMatch?.whatsapp || '',
+          operatingHours: b.operatingHours || seedMatch?.operatingHours || 'Seg a Sex, 08:00 às 18:00',
+          areaM2: b.areaM2 ?? seedMatch?.areaM2,
+          notes: b.notes || seedMatch?.notes || ''
+        };
+      });
+    }
+
+    if (parsed.inventories && Array.isArray(parsed.inventories)) {
+      parsed.inventories.forEach((inv: any) => {
+        if (inv.title) inv.title = inv.title.replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
+      });
+    }
+    if (parsed.transfers && Array.isArray(parsed.transfers)) {
+      parsed.transfers.forEach((trf: any) => {
+        if (trf.notes) trf.notes = trf.notes.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
+      });
+    }
+    if (parsed.notifications && Array.isArray(parsed.notifications)) {
+      parsed.notifications.forEach((n: any) => {
+        if (n.title) n.title = n.title.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
+        if (n.message) n.message = n.message.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
+      });
+    }
+    if (parsed.auditLogs && Array.isArray(parsed.auditLogs)) {
+      parsed.auditLogs.forEach((l: any) => {
+        if (l.module) l.module = l.module.replace(/Filiais/g, 'Unidades').replace(/Filial/g, 'Unidade');
+        if (l.details) l.details = l.details.replace(/Filiais/g, 'Unidades').replace(/filiais/g, 'unidades').replace(/Filial/g, 'Unidade').replace(/filial/g, 'unidade');
+      });
+    }
+
+    for (const p of parsed.products) {
+      if (!p.stockByBranch) p.stockByBranch = {};
+      for (const b of parsed.branches) {
+        if (p.stockByBranch[b.code] === undefined) {
+          p.stockByBranch[b.code] = 0;
+        }
+      }
+      const seedProd = INITIAL_PRODUCTS.find((sp: any) => sp.code === p.code);
+      if (seedProd) {
+        if (seedProd.batchNumber && !p.batchNumber) p.batchNumber = seedProd.batchNumber;
+        if (seedProd.batches && (!p.batches || p.batches.length === 0)) p.batches = seedProd.batches;
+        if (seedProd.expirationDate && !p.expirationDate) p.expirationDate = seedProd.expirationDate;
+      }
+    }
+
+    if (!parsed.users || !Array.isArray(parsed.users)) {
+      parsed.users = [...INITIAL_USERS];
+    }
+    const zynectaIndex = parsed.users.findIndex((u: any) => u.email?.toLowerCase() === 'zynecta@gmail.com');
+    if (zynectaIndex >= 0) {
+      parsed.users[zynectaIndex].role = 'Master';
+      parsed.users[zynectaIndex].password = 'Zynecta@1973';
+      parsed.users[zynectaIndex].active = true;
+    } else {
+      parsed.users.unshift({
+        id: 'user-master-zynecta',
+        name: 'Administrador Master',
+        email: 'zynecta@gmail.com',
+        password: 'Zynecta@1973',
+        role: 'Master',
+        branch: 'SP',
+        active: true,
+        firstAccess: false,
+        createdAt: '2025-01-01T08:00:00Z',
+        department: 'Diretoria Geral & TI',
+        phone: '(11) 98765-4321',
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250'
+      });
+    }
+
+    if (!parsed.settings) {
+      parsed.settings = INITIAL_SETTINGS;
+    } else if (!parsed.settings.budgetPolicy) {
+      parsed.settings.budgetPolicy = DEFAULT_BUDGET_POLICY;
+    }
+
+    // Remove legacy embedded backupSnapshots so core state remains lightweight
+    if ('backupSnapshots' in parsed) {
+      delete parsed.backupSnapshots;
+    }
+
+    return parsed as AppState;
+  }
+
+  private buildInitialState(): AppState {
+    return {
       branches: INITIAL_BRANCHES,
       products: INITIAL_PRODUCTS,
       users: INITIAL_USERS,
@@ -242,106 +374,549 @@ class DataService {
       notifications: INITIAL_NOTIFICATIONS,
       settings: INITIAL_SETTINGS
     };
-
-    this.saveState(initialState);
-    return initialState;
   }
 
-  private lastLocalSaveTime: number = Date.now();
+  private loadState(): AppState {
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Migrate embedded backupSnapshots out of STORAGE_KEY if present
+        if (parsed.backupSnapshots && Array.isArray(parsed.backupSnapshots) && parsed.backupSnapshots.length > 0) {
+          if (this.backupSnapshots.length === 0) {
+            this.backupSnapshots = parsed.backupSnapshots.slice(0, 5);
+            this.saveBackupsToStorage();
+          }
+          delete parsed.backupSnapshots;
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        const normalized = this.normalizeState(parsed);
+        this.hasRealLocalState = true;
+        if (this.lastLocalSaveTime === 0) {
+          this.lastLocalSaveTime = this.inferStateTimestamp(normalized);
+        }
+        return normalized;
+      }
+    } catch (e) {
+      console.error('Erro ao carregar estado do localStorage:', e);
+    }
+
+    // IMPORTANTE: Se o localStorage estiver vazio (ex: F5 em nova aba/URL/atualização),
+    // NÃO salvamos o initialState nem o enviamos para o Firestore!
+    // Mantemos em memória temporária até a nuvem responder com os dados reais.
+    this.hasRealLocalState = false;
+    this.lastLocalSaveTime = 0;
+    return this.buildInitialState();
+  }
+
+  private loadBackupsFromStorage() {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(BACKUP_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.backupSnapshots = parsed;
+        }
+      }
+    } catch (e) {
+      this.backupSnapshots = [];
+    }
+  }
+
+  private saveBackupsToStorage() {
+    if (typeof window === 'undefined') return;
+    let list = this.backupSnapshots.slice(0, 5);
+    while (list.length > 0) {
+      try {
+        localStorage.setItem(BACKUP_STORAGE_KEY, JSON.stringify(list));
+        this.backupSnapshots = list;
+        return;
+      } catch (e) {
+        // Trim oldest snapshot if localStorage quota is tight so main STORAGE_KEY is never impacted
+        list = list.slice(0, list.length - 1);
+      }
+    }
+    try {
+      localStorage.removeItem(BACKUP_STORAGE_KEY);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  private initBackupConfigInMemory() {
+    if (!this.state.backupConfig) {
+      this.state.backupConfig = {
+        ...DEFAULT_BACKUP_CONFIG,
+        nextScheduledAt: this.computeNextScheduledAt(DEFAULT_BACKUP_CONFIG.frequency, DEFAULT_BACKUP_CONFIG.scheduledTime)
+      };
+    }
+  }
+
+  private getModulePayload(mod: ModuleKey, s: AppState = this.state): Record<string, any> {
+    switch (mod) {
+      case 'meta':
+        return {
+          branches: s.branches || [],
+          users: s.users || [],
+          settings: s.settings || INITIAL_SETTINGS,
+          backupConfig: s.backupConfig || DEFAULT_BACKUP_CONFIG,
+          notifications: (s.notifications || []).slice(0, 60)
+        };
+      case 'catalog':
+        return {
+          products: s.products || []
+        };
+      case 'movements':
+        return {
+          movements: s.movements || [],
+          transfers: s.transfers || [],
+          requisitions: s.requisitions || []
+        };
+      case 'inventories':
+        return {
+          inventories: s.inventories || []
+        };
+      case 'purchases':
+        return {
+          purchaseRequests: s.purchaseRequests || [],
+          purchaseOrders: s.purchaseOrders || [],
+          costCenters: s.costCenters || []
+        };
+      case 'assets':
+        return {
+          assets: s.assets || []
+        };
+      case 'logs':
+        return {
+          auditLogs: (s.auditLogs || []).slice(0, 120)
+        };
+    }
+  }
+
+  private applyModulePayload(mod: ModuleKey, data: any) {
+    if (!data || typeof data !== 'object') return;
+    switch (mod) {
+      case 'meta':
+        if (Array.isArray(data.branches) && data.branches.length > 0) this.state.branches = data.branches;
+        if (Array.isArray(data.users) && data.users.length > 0) this.state.users = data.users;
+        if (data.settings) this.state.settings = data.settings;
+        if (data.backupConfig) this.state.backupConfig = data.backupConfig;
+        if (Array.isArray(data.notifications)) this.state.notifications = data.notifications;
+        break;
+      case 'catalog':
+        if (Array.isArray(data.products)) this.state.products = data.products;
+        break;
+      case 'movements':
+        if (Array.isArray(data.movements)) this.state.movements = data.movements;
+        if (Array.isArray(data.transfers)) this.state.transfers = data.transfers;
+        if (Array.isArray(data.requisitions)) this.state.requisitions = data.requisitions;
+        break;
+      case 'inventories':
+        if (Array.isArray(data.inventories)) this.state.inventories = data.inventories;
+        break;
+      case 'purchases':
+        if (Array.isArray(data.purchaseRequests)) this.state.purchaseRequests = data.purchaseRequests;
+        if (Array.isArray(data.purchaseOrders)) this.state.purchaseOrders = data.purchaseOrders;
+        if (Array.isArray(data.costCenters)) this.state.costCenters = data.costCenters;
+        break;
+      case 'assets':
+        if (Array.isArray(data.assets)) this.state.assets = data.assets;
+        break;
+      case 'logs':
+        if (Array.isArray(data.auditLogs)) this.state.auditLogs = data.auditLogs;
+        break;
+    }
+  }
+
+  private captureModuleBaselines() {
+    for (const mod of ALL_MODULES) {
+      try {
+        this.lastModuleJson[mod] = JSON.stringify(this.getModulePayload(mod, this.state));
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
+  private registerUnloadFlush() {
+    if (typeof window === 'undefined') return;
+    const flush = () => {
+      if (this.dirtyModules.size > 0) {
+        this.pushDirtyModulesToCloud();
+      }
+    };
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+  }
+
+  private persistCoreStateToLocalStorage() {
+    if (typeof window === 'undefined') return;
+    const { backupSnapshots, ...coreState } = this.state as any;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(coreState));
+    } catch (e) {
+      // If localStorage is tight due to old backup snapshots or large logs, reclaim backup space first
+      try {
+        localStorage.removeItem(BACKUP_STORAGE_KEY);
+        if (Array.isArray(coreState.auditLogs) && coreState.auditLogs.length > 60) {
+          coreState.auditLogs = coreState.auditLogs.slice(0, 60);
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(coreState));
+      } catch (err2) {
+        console.error('Erro ao salvar estado no localStorage:', err2);
+      }
+    }
+  }
 
   public saveState(newState?: AppState, skipCloudPush = false) {
     if (newState) {
-      this.state = newState;
-    }
-    this.lastLocalSaveTime = Date.now();
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
-    } catch (e) {
-      console.error('Erro ao salvar estado no localStorage:', e);
+      const { backupSnapshots, ...clean } = newState as any;
+      this.state = { ...clean };
+    } else {
+      const { backupSnapshots, ...clean } = this.state as any;
+      this.state = { ...clean };
     }
 
+    const now = Date.now();
+    if (!this.isSyncingFromCloud) {
+      this.lastLocalSaveTime = now;
+      this.hasRealLocalState = true;
+
+      for (const mod of ALL_MODULES) {
+        try {
+          const json = JSON.stringify(this.getModulePayload(mod, this.state));
+          if (json !== this.lastModuleJson[mod]) {
+            this.lastModuleJson[mod] = json;
+            this.dirtyModules.add(mod);
+            this.moduleTimestamps[mod] = now;
+          }
+        } catch (e) {
+          this.dirtyModules.add(mod);
+          this.moduleTimestamps[mod] = now;
+        }
+      }
+      this.persistMetaTimestamps();
+    }
+
+    this.persistCoreStateToLocalStorage();
     this.notifyListeners();
 
-    if (!skipCloudPush && !this.isSyncingFromCloud && typeof window !== 'undefined') {
+    if (!skipCloudPush && !this.isSyncingFromCloud && this.cloudBootstrapped && typeof window !== 'undefined' && this.dirtyModules.size > 0) {
       if (this.cloudPushTimer) {
         clearTimeout(this.cloudPushTimer);
       }
       this.cloudPushTimer = setTimeout(() => {
-        this.pushStateToCloud();
-      }, 500);
+        this.pushDirtyModulesToCloud();
+      }, 40);
     }
   }
 
   // ==========================================
-  // SINCRONIZAÇÃO EM NUVEM (MULTI-COMPUTADOR E MULTI-FILIAIS)
+  // SINCRONIZAÇÃO EM NUVEM SHARDED (MULTI-COMPUTADOR E ZERO PERDA DE DADOS)
   // ==========================================
+
+  private async writeModuleToCloud(mod: ModuleKey, overrideTs?: number): Promise<boolean> {
+    const docId = MODULE_DOC_IDS[mod];
+    const ts = overrideTs || this.moduleTimestamps[mod] || Date.now();
+    const iso = new Date(ts).toISOString();
+
+    const cleanPayload = JSON.parse(JSON.stringify(this.getModulePayload(mod, this.state)));
+    const jsonStr = JSON.stringify(cleanPayload);
+    const byteSize = typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(jsonStr).length : jsonStr.length * 2;
+
+    if (byteSize <= 700_000) {
+      await setDoc(doc(db, 'erp_state', docId), {
+        data: cleanPayload,
+        chunked: false,
+        updatedAt: iso,
+        updatedAtMs: ts,
+        version: 'v2_sharded'
+      });
+    } else {
+      // Auto-chunking para catálogos/movimentações enormes (>700KB), evitando limite de 1MB do Firestore
+      const CHUNK_SIZE = 500_000;
+      const chunkCount = Math.ceil(jsonStr.length / CHUNK_SIZE);
+      for (let i = 0; i < chunkCount; i++) {
+        const slice = jsonStr.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        await setDoc(doc(db, 'erp_state', `${docId}_c_${i}`), {
+          index: i,
+          chunk: slice,
+          updatedAt: iso,
+          updatedAtMs: ts
+        });
+      }
+      await setDoc(doc(db, 'erp_state', docId), {
+        chunked: true,
+        chunkCount,
+        updatedAt: iso,
+        updatedAtMs: ts,
+        version: 'v2_sharded'
+      });
+    }
+
+    this.moduleTimestamps[mod] = ts;
+    return true;
+  }
+
+  private async readModuleFromCloud(mod: ModuleKey, requireServer = false): Promise<{ data: any; updatedAtMs: number } | null> {
+    const docId = MODULE_DOC_IDS[mod];
+    const ref = doc(db, 'erp_state', docId);
+    const snap = requireServer ? await getDocFromServer(ref) : await getDoc(ref);
+    if (!snap.exists()) return null;
+
+    const docData = snap.data();
+    if (!docData) return null;
+
+    const updatedAtMs = typeof docData.updatedAtMs === 'number'
+      ? docData.updatedAtMs
+      : (docData.updatedAt ? new Date(docData.updatedAt).getTime() : 0);
+
+    if (docData.chunked && typeof docData.chunkCount === 'number' && docData.chunkCount > 0) {
+      const chunkPromises: Promise<string>[] = [];
+      for (let i = 0; i < docData.chunkCount; i++) {
+        const cRef = doc(db, 'erp_state', `${docId}_c_${i}`);
+        chunkPromises.push(
+          (requireServer ? getDocFromServer(cRef) : getDoc(cRef))
+            .then(cSnap => (cSnap.exists() ? (cSnap.data()?.chunk || '') : ''))
+        );
+      }
+      const chunks = await Promise.all(chunkPromises);
+      if (chunks.some(c => !c)) return null;
+      const fullJson = chunks.join('');
+      if (!fullJson) return null;
+      try {
+        return { data: JSON.parse(fullJson), updatedAtMs };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    return docData.data ? { data: docData.data, updatedAtMs } : null;
+  }
+
+  private async pushDirtyModulesToCloud(): Promise<boolean> {
+    if (this.cloudPushTimer) {
+      clearTimeout(this.cloudPushTimer);
+      this.cloudPushTimer = null;
+    }
+    if (this.dirtyModules.size === 0) return true;
+    const toPush = Array.from(this.dirtyModules);
+    this.dirtyModules.clear();
+
+    try {
+      await Promise.all(toPush.map(mod => this.writeModuleToCloud(mod)));
+      this.persistMetaTimestamps();
+      this.cloudSyncStatus = {
+        connected: true,
+        lastSync: new Date().toISOString(),
+        databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+      };
+      return true;
+    } catch (err: any) {
+      // Re-queue failed modules for next retry
+      toPush.forEach(m => this.dirtyModules.add(m));
+      console.warn('Erro ao enviar módulos alterados para Firestore:', err.message);
+      this.cloudSyncStatus.connected = false;
+      this.cloudSyncStatus.error = err.message;
+      return false;
+    }
+  }
 
   private initCloudSync() {
     if (typeof window === 'undefined') return;
+    this.bootstrapFromCloud();
+  }
 
+  private async bootstrapFromCloud() {
     try {
-      const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
-
-      onSnapshot(stateDocRef, (snapshot) => {
-        // Ignora eventos otimistas pendentes locais para não sobrescrever estado em memória
-        if (snapshot.metadata && snapshot.metadata.hasPendingWrites) {
-          return;
+      // Validação obrigatória de conectividade inicial com servidor Firestore
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (connErr: any) {
+        if (connErr?.message?.includes('the client is offline')) {
+          console.error('Por favor, verifique sua conexão e configuração do Firebase.');
         }
+      }
 
-        if (snapshot.exists()) {
-          const cloudData = snapshot.data();
-          if (cloudData && cloudData.state) {
-            // Se os dados da nuvem forem mais antigos que a gravação local mais recente, rejeitamos o overwrite
-            const cloudUpdatedAt = cloudData.updatedAt ? new Date(cloudData.updatedAt).getTime() : 0;
-            if (cloudUpdatedAt > 0 && cloudUpdatedAt < this.lastLocalSaveTime) {
-              // Notifica a nuvem com nosso estado local mais recente
-              this.pushStateToCloud();
-              return;
+      const metaCheck = await this.readModuleFromCloud('meta', true);
+      let appliedFromCloud = false;
+      const modulesToPush = new Set<ModuleKey>();
+
+      if (metaCheck) {
+        // Banco já utiliza arquitetura modular v2_sharded
+        const results = await Promise.all(
+          ALL_MODULES.map(async mod => ({
+            mod,
+            res: mod === 'meta' ? metaCheck : await this.readModuleFromCloud(mod, true)
+          }))
+        );
+
+        this.isSyncingFromCloud = true;
+        for (const { mod, res } of results) {
+          const localTs = this.hasRealLocalState ? (this.moduleTimestamps[mod] || this.lastLocalSaveTime || 0) : 0;
+          if (res && res.data) {
+            if (!this.hasRealLocalState || res.updatedAtMs > localTs) {
+              this.applyModulePayload(mod, res.data);
+              this.moduleTimestamps[mod] = res.updatedAtMs;
+              appliedFromCloud = true;
+            } else if (localTs > res.updatedAtMs) {
+              modulesToPush.add(mod);
             }
+          } else if (this.hasRealLocalState && !this.dirtyModules.has(mod)) {
+            modulesToPush.add(mod);
+          }
+        }
+        if (appliedFromCloud) {
+          this.state = { ...this.normalizeState(this.state) };
+          this.cleanUpProductionRemnants(undefined, true);
+          this.initBackupConfigInMemory();
+          this.captureModuleBaselines();
+          this.hasRealLocalState = true;
+          const maxCloudTs = Math.max(0, ...ALL_MODULES.map(m => this.moduleTimestamps[m] || 0));
+          if (maxCloudTs > this.lastLocalSaveTime) {
+            this.lastLocalSaveTime = maxCloudTs;
+          }
+          this.persistMetaTimestamps();
+          this.persistCoreStateToLocalStorage();
+        }
+        this.isSyncingFromCloud = false;
+      } else {
+        // Verificar documento legado único almoxplus_production no servidor para migração segura sem perda de dados
+        const legacySnap = await getDocFromServer(doc(db, 'erp_state', 'almoxplus_production'));
 
-            this.isSyncingFromCloud = true;
-
-            // PRESERVAÇÃO E MERGE INTELIGENTE DE CENTROS DE CUSTO:
-            // Garante que nenhum centro de custo criado recentemente localmente seja apagado por snapshot desatualizado
-            if (!cloudData.state.costCenters || !Array.isArray(cloudData.state.costCenters)) {
-              cloudData.state.costCenters = this.state.costCenters || [];
-            } else if (this.state.costCenters && this.state.costCenters.length > 0) {
-              const cloudMap = new Map((cloudData.state.costCenters as CostCenter[]).map(c => [c.id, c]));
-              for (const localCC of this.state.costCenters) {
-                if (localCC && localCC.id && !cloudMap.has(localCC.id)) {
-                  cloudData.state.costCenters.unshift(localCC);
-                }
+        if (legacySnap.exists()) {
+          const legacyData = legacySnap.data();
+          if (legacyData && legacyData.state) {
+            const cloudTs = legacyData.updatedAt ? new Date(legacyData.updatedAt).getTime() : 0;
+            if (!this.hasRealLocalState || cloudTs > this.lastLocalSaveTime) {
+              this.isSyncingFromCloud = true;
+              this.state = { ...this.normalizeState(legacyData.state) };
+              this.cleanUpProductionRemnants(undefined, true);
+              this.initBackupConfigInMemory();
+              this.captureModuleBaselines();
+              this.hasRealLocalState = true;
+              const effectiveTs = cloudTs || Date.now();
+              this.lastLocalSaveTime = effectiveTs;
+              for (const m of ALL_MODULES) {
+                this.moduleTimestamps[m] = effectiveTs;
+                modulesToPush.add(m);
               }
+              this.persistMetaTimestamps();
+              this.persistCoreStateToLocalStorage();
+              this.isSyncingFromCloud = false;
+              appliedFromCloud = true;
+            } else {
+              // Local tem alterações mais recentes não migradas -> preserva local e migra para módulos
+              for (const m of ALL_MODULES) modulesToPush.add(m);
             }
-
-            this.state = cloudData.state;
-            this.cleanUpProductionRemnants();
-            this.cloudSyncStatus = {
-              connected: true,
-              lastSync: new Date().toISOString(),
-              databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
-            };
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
-            } catch (e) {
-              // ignore
-            }
-            this.isSyncingFromCloud = false;
-            this.notifyListeners();
           }
         } else {
-          // Documento inicial ainda não gravado na nuvem -> envia estado inicial
-          this.pushStateToCloud();
+          // Banco na nuvem está confirmado vazio no servidor pela primeira vez
+          const initTs = this.hasRealLocalState && this.lastLocalSaveTime > 0 ? this.lastLocalSaveTime : Date.now();
+          this.lastLocalSaveTime = initTs;
+          this.hasRealLocalState = true;
+          for (const m of ALL_MODULES) {
+            this.moduleTimestamps[m] = initTs;
+            modulesToPush.add(m);
+          }
+          this.persistMetaTimestamps();
+          this.persistCoreStateToLocalStorage();
         }
-      }, (error) => {
-        console.warn('Firestore onSnapshot listener status:', error.message);
-        this.cloudSyncStatus.connected = false;
-        this.cloudSyncStatus.error = error.message;
-      });
+      }
+
+      if (modulesToPush.size > 0) {
+        await Promise.all(Array.from(modulesToPush).map(m => this.writeModuleToCloud(m, this.moduleTimestamps[m] || undefined)));
+        this.persistMetaTimestamps();
+      }
+
+      this.cloudBootstrapped = true;
+      if (this.dirtyModules.size > 0) {
+        await this.pushDirtyModulesToCloud();
+      }
+
+      this.cloudSyncStatus = {
+        connected: true,
+        lastSync: new Date().toISOString(),
+        databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+      };
+
+      if (appliedFromCloud) {
+        this.notifyListeners();
+      }
+
+      this.attachModuleListeners();
     } catch (err: any) {
       console.warn('Falha ao inicializar sincronização em nuvem:', err.message);
       this.cloudSyncStatus.connected = false;
       this.cloudSyncStatus.error = err.message;
+      this.cloudBootstrapped = true;
+      this.attachModuleListeners();
+    }
+  }
+
+  private attachModuleListeners() {
+    for (const mod of ALL_MODULES) {
+      const ref = doc(db, 'erp_state', MODULE_DOC_IDS[mod]);
+      onSnapshot(ref, async (snapshot) => {
+        if (!this.cloudBootstrapped) return;
+        if (snapshot.metadata && snapshot.metadata.hasPendingWrites) return;
+        if (!snapshot.exists()) return;
+
+        const docData = snapshot.data();
+        if (!docData) return;
+
+        const cloudTs = typeof docData.updatedAtMs === 'number'
+          ? docData.updatedAtMs
+          : (docData.updatedAt ? new Date(docData.updatedAt).getTime() : 0);
+
+        const localTs = this.moduleTimestamps[mod] || 0;
+        // Só aplica se o snapshot da nuvem for estritamente mais recente que o módulo local
+        if (cloudTs <= localTs) {
+          return;
+        }
+
+        let payload = docData.data;
+        if (docData.chunked) {
+          const full = await this.readModuleFromCloud(mod, false);
+          if (!full || !full.data) return;
+          payload = full.data;
+        }
+        if (!payload) return;
+
+        this.isSyncingFromCloud = true;
+        this.applyModulePayload(mod, payload);
+        this.state = this.normalizeState(this.state);
+        this.cleanUpProductionRemnants(undefined, true);
+        this.moduleTimestamps[mod] = cloudTs;
+        if (cloudTs > this.lastLocalSaveTime) {
+          this.lastLocalSaveTime = cloudTs;
+        }
+        this.hasRealLocalState = true;
+        try {
+          this.lastModuleJson[mod] = JSON.stringify(this.getModulePayload(mod, this.state));
+        } catch (e) {
+          // ignore
+        }
+        this.persistMetaTimestamps();
+        this.persistCoreStateToLocalStorage();
+        this.cloudSyncStatus = {
+          connected: true,
+          lastSync: new Date().toISOString(),
+          databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+        };
+        this.isSyncingFromCloud = false;
+        this.notifyListeners();
+      }, (error) => {
+        console.warn(`Firestore onSnapshot listener (${mod}):`, error.message);
+        this.cloudSyncStatus.connected = false;
+        this.cloudSyncStatus.error = error.message;
+      });
     }
   }
 
@@ -363,30 +938,32 @@ class DataService {
   }
 
   public async pushStateToCloud(): Promise<boolean> {
+    if (this.isPushingToCloud) {
+      return true;
+    }
+    this.isPushingToCloud = true;
     try {
       if (this.cloudPushTimer) {
         clearTimeout(this.cloudPushTimer);
         this.cloudPushTimer = null;
       }
-      const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
-      // Sanitiza removendo campos undefined e garantindo integridade JSON
-      const cleanState = JSON.parse(JSON.stringify(this.state));
-      // Limita logs de auditoria no documento principal para evitar estouro de 1MB do Firestore
-      if (cleanState.auditLogs && cleanState.auditLogs.length > 50) {
-        cleanState.auditLogs = cleanState.auditLogs.slice(0, 50);
-      }
 
-      const nowIso = new Date().toISOString();
-      await setDoc(stateDocRef, {
-        state: cleanState,
-        updatedAt: nowIso,
-        version: 'production_v1'
-      });
+      const modulesToSend = this.dirtyModules.size > 0 ? Array.from(this.dirtyModules) : ALL_MODULES;
+      this.dirtyModules.clear();
 
-      this.lastLocalSaveTime = new Date(nowIso).getTime();
+      const nowMs = Date.now();
+      await Promise.all(
+        modulesToSend.map(mod => {
+          const ts = Math.max(this.moduleTimestamps[mod] || 0, nowMs);
+          return this.writeModuleToCloud(mod, ts);
+        })
+      );
+
+      this.lastLocalSaveTime = Math.max(this.lastLocalSaveTime, nowMs);
+      this.persistMetaTimestamps();
       this.cloudSyncStatus = {
         connected: true,
-        lastSync: nowIso,
+        lastSync: new Date(nowMs).toISOString(),
         databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
       };
       return true;
@@ -395,23 +972,65 @@ class DataService {
       this.cloudSyncStatus.connected = false;
       this.cloudSyncStatus.error = err.message;
       return false;
+    } finally {
+      this.isPushingToCloud = false;
     }
   }
 
   public async pullStateFromCloud(): Promise<boolean> {
     try {
-      const stateDocRef = doc(db, 'erp_state', 'almoxplus_production');
-      const snap = await getDoc(stateDocRef);
+      const metaCheck = await this.readModuleFromCloud('meta', true);
+      if (metaCheck) {
+        const results = await Promise.all(
+          ALL_MODULES.map(async mod => ({
+            mod,
+            res: mod === 'meta' ? metaCheck : await this.readModuleFromCloud(mod, true)
+          }))
+        );
+        this.isSyncingFromCloud = true;
+        let maxTs = 0;
+        for (const { mod, res } of results) {
+          if (res && res.data) {
+            this.applyModulePayload(mod, res.data);
+            this.moduleTimestamps[mod] = res.updatedAtMs;
+            if (res.updatedAtMs > maxTs) maxTs = res.updatedAtMs;
+          }
+        }
+        this.state = this.normalizeState(this.state);
+        this.cleanUpProductionRemnants(undefined, true);
+        this.initBackupConfigInMemory();
+        this.captureModuleBaselines();
+        this.lastLocalSaveTime = maxTs || Date.now();
+        this.hasRealLocalState = true;
+        this.persistMetaTimestamps();
+        this.persistCoreStateToLocalStorage();
+        this.isSyncingFromCloud = false;
+        this.cloudSyncStatus = {
+          connected: true,
+          lastSync: new Date().toISOString(),
+          databaseId: 'ai-studio-almoxpluserpdeal-24144e17-b53e-44ab-a942-0cee7e733fd0'
+        };
+        this.notifyListeners();
+        return true;
+      }
+
+      const snap = await getDocFromServer(doc(db, 'erp_state', 'almoxplus_production')).catch(() =>
+        getDoc(doc(db, 'erp_state', 'almoxplus_production'))
+      );
       if (snap.exists()) {
         const data = snap.data();
         if (data && data.state) {
           this.isSyncingFromCloud = true;
-          this.state = data.state;
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
-          } catch (e) {
-            // ignore
-          }
+          this.state = this.normalizeState(data.state);
+          this.cleanUpProductionRemnants(undefined, true);
+          this.initBackupConfigInMemory();
+          this.captureModuleBaselines();
+          const ts = data.updatedAt ? new Date(data.updatedAt).getTime() : Date.now();
+          this.lastLocalSaveTime = ts;
+          for (const m of ALL_MODULES) this.moduleTimestamps[m] = ts;
+          this.hasRealLocalState = true;
+          this.persistMetaTimestamps();
+          this.persistCoreStateToLocalStorage();
           this.isSyncingFromCloud = false;
           this.cloudSyncStatus = {
             connected: true,
@@ -648,7 +1267,7 @@ class DataService {
     this.notifyListeners();
   }
 
-  public cleanUpProductionRemnants(currentUser?: User): void {
+  public cleanUpProductionRemnants(currentUser?: User, skipCloudPush = false): void {
     // Sanitização automática: remove contas fictícias e zera dotações residuais para início em produção
     const DEMO_EMAILS = [
       'admin@almoxplus.com.br',
@@ -680,10 +1299,9 @@ class DataService {
       changed = true;
     }
 
-    if (changed) {
+    if (changed && !skipCloudPush) {
       this.saveState(undefined, true);
-      this.pushStateToCloud();
-      this.notifyListeners();
+      this.pushDirtyModulesToCloud();
     }
   }
 
@@ -707,16 +1325,6 @@ class DataService {
     this.saveState();
     this.notifyListeners();
     this.pushStateToCloud();
-
-    // Gravação redundante como documento individual na coleção costCenters para máxima garantia de persistência
-    try {
-      const ccClean = JSON.parse(JSON.stringify(cc));
-      setDoc(doc(db, 'costCenters', cc.id), ccClean).catch(err => {
-        console.warn('Gravação em coleção costCenters (aviso não-bloqueante):', err.message);
-      });
-    } catch (e) {
-      // ignore
-    }
 
     return cc;
   }
@@ -745,14 +1353,6 @@ class DataService {
     this.saveState();
     this.notifyListeners();
     this.pushStateToCloud();
-
-    try {
-      deleteDoc(doc(db, 'costCenters', id)).catch(err => {
-        console.warn('Exclusão em coleção costCenters (aviso não-bloqueante):', err.message);
-      });
-    } catch (e) {
-      // ignore
-    }
   }
 
   public clearAllCostCenters(currentUser: User): void {
@@ -2791,16 +3391,8 @@ class DataService {
   }
 
   private ensureBackupRoutineInitialized() {
-    let changed = false;
-    if (!this.state.backupConfig) {
-      this.state.backupConfig = {
-        ...DEFAULT_BACKUP_CONFIG,
-        nextScheduledAt: this.computeNextScheduledAt(DEFAULT_BACKUP_CONFIG.frequency, DEFAULT_BACKUP_CONFIG.scheduledTime)
-      };
-      changed = true;
-    }
-
-    if (!this.state.backupSnapshots || !Array.isArray(this.state.backupSnapshots) || this.state.backupSnapshots.length === 0) {
+    this.initBackupConfigInMemory();
+    if (!this.backupSnapshots || !Array.isArray(this.backupSnapshots) || this.backupSnapshots.length === 0) {
       const payloadFull = this.buildScopedPayload('COMPLETO', this.state);
       const strFull = JSON.stringify(payloadFull);
       const payloadInvPurchase = this.buildScopedPayload('INVENTARIO_E_COMPRAS', this.state);
@@ -2842,18 +3434,16 @@ class DataService {
         payload: payloadFull
       };
 
-      this.state.backupSnapshots = [snap1, snap2];
-      this.state.backupConfig.lastRunAt = todayEarly.toISOString();
-      changed = true;
-    }
-
-    if (changed) {
-      this.saveState();
+      this.backupSnapshots = [snap1, snap2];
+      if (this.state.backupConfig) {
+        this.state.backupConfig.lastRunAt = todayEarly.toISOString();
+      }
+      this.saveBackupsToStorage();
     }
   }
 
   public getBackupConfig(): BackupRoutineConfig {
-    this.ensureBackupRoutineInitialized();
+    this.initBackupConfigInMemory();
     return this.state.backupConfig!;
   }
 
@@ -2861,7 +3451,7 @@ class DataService {
     if (currentUser.role === 'Visitante') {
       throw new Error('Perfil Visitante não possui permissão para alterar a rotina de backup.');
     }
-    this.ensureBackupRoutineInitialized();
+    this.initBackupConfigInMemory();
     const prev = { ...this.state.backupConfig! };
     const merged: BackupRoutineConfig = {
       ...prev,
@@ -2888,7 +3478,7 @@ class DataService {
 
   public getBackupSnapshots(): BackupSnapshot[] {
     this.ensureBackupRoutineInitialized();
-    return this.state.backupSnapshots || [];
+    return this.backupSnapshots || [];
   }
 
   public createBackupSnapshot(
@@ -2901,7 +3491,7 @@ class DataService {
       throw new Error('Perfil Visitante não possui permissão para gerar backups.');
     }
 
-    this.ensureBackupRoutineInitialized();
+    this.initBackupConfigInMemory();
     const payload = this.buildScopedPayload(scope, this.state);
     const payloadStr = JSON.stringify(payload);
     const now = new Date();
@@ -2934,15 +3524,15 @@ class DataService {
       payload
     };
 
-    if (!this.state.backupSnapshots) {
-      this.state.backupSnapshots = [];
+    if (!this.backupSnapshots) {
+      this.backupSnapshots = [];
     }
-    this.state.backupSnapshots.unshift(snapshot);
+    this.backupSnapshots.unshift(snapshot);
 
-    // Enforce retention policy
-    const limit = Math.max(3, this.state.backupConfig?.retentionLimit || 15);
-    if (this.state.backupSnapshots.length > limit) {
-      this.state.backupSnapshots = this.state.backupSnapshots.slice(0, limit);
+    // Enforce retention policy (stored separately in BACKUP_STORAGE_KEY, max 5 local snapshots)
+    const limit = Math.min(5, Math.max(2, this.state.backupConfig?.retentionLimit || 5));
+    if (this.backupSnapshots.length > limit) {
+      this.backupSnapshots = this.backupSnapshots.slice(0, limit);
     }
 
     if (this.state.backupConfig) {
@@ -2953,6 +3543,7 @@ class DataService {
       );
     }
 
+    this.saveBackupsToStorage();
     this.saveState();
 
     this.logAudit(
@@ -3004,7 +3595,7 @@ class DataService {
     }
 
     const payload = JSON.parse(JSON.stringify(target.payload)) as Partial<AppState>;
-    const currentSnapshots = this.state.backupSnapshots || [];
+    const currentSnapshots = this.backupSnapshots || [];
     const currentBackupConfig = this.state.backupConfig;
 
     const applyInventory = restoreScope === 'COMPLETO' || restoreScope === 'INVENTARIO_E_COMPRAS' || restoreScope === 'APENAS_INVENTARIO';
@@ -3031,7 +3622,8 @@ class DataService {
       if (payload.settings) this.state.settings = payload.settings;
     }
 
-    this.state.backupSnapshots = currentSnapshots;
+    this.backupSnapshots = currentSnapshots;
+    this.saveBackupsToStorage();
     this.state.backupConfig = currentBackupConfig;
     this.saveState();
 
@@ -3065,7 +3657,8 @@ class DataService {
     if (idx === -1) throw new Error('Ponto de restauração não localizado.');
 
     const removed = list.splice(idx, 1)[0];
-    this.saveState();
+    this.saveBackupsToStorage();
+    this.notifyListeners();
 
     this.logAudit(
       currentUser,
@@ -3216,7 +3809,7 @@ class DataService {
         );
       }
 
-      const currentSnapshots = this.state.backupSnapshots || [];
+      const currentSnapshots = this.backupSnapshots || [];
       const currentBackupConfig = this.state.backupConfig;
 
       const applyInventory = restoreScope === 'COMPLETO' || restoreScope === 'INVENTARIO_E_COMPRAS' || restoreScope === 'APENAS_INVENTARIO';
@@ -3243,7 +3836,8 @@ class DataService {
         if (sourceData.settings) this.state.settings = sourceData.settings;
       }
 
-      this.state.backupSnapshots = currentSnapshots;
+      this.backupSnapshots = currentSnapshots;
+      this.saveBackupsToStorage();
       this.state.backupConfig = currentBackupConfig;
       this.saveState();
 

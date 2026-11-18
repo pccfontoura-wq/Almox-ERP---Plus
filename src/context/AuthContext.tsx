@@ -159,8 +159,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           null,
           currentUser.branch
         );
+        try {
+          sessionStorage.setItem(
+            'almoxplus_session_expired',
+            'Sua sessão expirou por inatividade (15 minutos). Por razões de segurança, faça login novamente.'
+          );
+        } catch (e) {
+          // ignore
+        }
         setCurrentUser(null);
-        alert('Sua sessão expirou por inatividade (15 minutos). Por razões de segurança, faça login novamente.');
       }, INACTIVITY_LIMIT_MS);
     };
 
